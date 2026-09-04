@@ -317,7 +317,7 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
-    public void Ci_keeps_pull_requests_hosted_and_trusted_events_variable_routed()
+    public void Ci_keeps_pull_requests_hosted_and_main_pushes_variable_routed()
     {
         var workflow = Script(".github/workflows/ci.yml");
         var normalized = workflow.Replace("\r\n", "\n");
@@ -325,7 +325,8 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("name: Build and test (Windows)", workflow);
         Assert.Contains("case(github.event_name == 'pull_request', 'windows-latest'", workflow);
         Assert.Contains("vars.PIPLAY_WINDOWS_RUNNER || 'windows-latest'", workflow);
-        Assert.Contains("push:\n    branches:\n      - main\n  workflow_dispatch:", normalized);
+        Assert.Contains("push:\n    branches:\n      - main", normalized);
+        Assert.DoesNotContain("workflow_dispatch:", normalized);
         Assert.DoesNotContain("\n    tags:", normalized);
         Assert.Contains("run: .\\scripts\\Test-LocalCI.ps1", workflow);
         Assert.Contains("persist-credentials: false", workflow);
@@ -336,7 +337,7 @@ public class ReleaseScriptPolicyTests
             .Select(line => line.Trim())
             .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(4, usesLines.Length);
+        Assert.Equal(3, usesLines.Length);
         Assert.All(usesLines, line => Assert.Matches(
             new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
             line));
@@ -360,6 +361,7 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("PiPlay.Channel", verifier);
         Assert.Contains("sourceDirty must be false", verifier);
         Assert.Contains("releaseEvidence must be false", verifier);
+        Assert.Contains("GitHub test prerelease; interactive verification pending on SND-DESK", verifier);
         Assert.Contains("releaseEvidence must be true", verifier);
         Assert.Contains("source commit, version stamps, and artifact hashes were captured from a clean tree", verifier);
         Assert.Contains("PACKAGE VERIFIED", verifier);
@@ -369,21 +371,41 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
-    public void Manual_ci_dispatch_builds_validates_and_uploads_only_a_test_package()
+    public void Manual_test_distribution_uses_only_a_unique_GitHub_prerelease()
     {
-        var workflow = Script(".github/workflows/ci.yml").Replace("\r\n", "\n");
+        var ciWorkflow = Script(".github/workflows/ci.yml");
+        var testReleasePath = Path.Combine(RepoRoot, ".github", "workflows", "test-release.yml");
+        Assert.True(File.Exists(testReleasePath), "The manual GitHub prerelease workflow is missing.");
+        var workflow = File.ReadAllText(testReleasePath).Replace("\r\n", "\n");
 
-        Assert.Contains("if: github.event_name == 'workflow_dispatch'", workflow);
+        Assert.DoesNotContain("actions/upload-artifact", ciWorkflow);
+        Assert.DoesNotContain("actions/upload-artifact", workflow);
+        Assert.Contains("workflow_dispatch:", workflow);
+        Assert.Contains("contents: write", workflow);
+        Assert.Contains("persist-credentials: false", workflow);
+        Assert.Contains("$headCommit -cne $env:GITHUB_SHA", workflow);
+        Assert.Contains("test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT", workflow);
         Assert.Contains("-Stage Publish", workflow);
         Assert.Contains("-Channel Stable", workflow);
         Assert.Contains("-NoVersionBump", workflow);
         Assert.Contains("-NoBuildNumberBump", workflow);
         Assert.Contains("-NonReleaseReason $nonReleaseReason", workflow);
-        Assert.Contains("Test-DownloadedPackage.ps1", workflow);
         Assert.Contains("-Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
-        Assert.Contains("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow);
-        Assert.Contains("PiPlay-test-${{ github.sha }}", workflow);
-        Assert.DoesNotContain("gh release create", workflow);
+        Assert.Contains("CreateFromDirectory", workflow);
+        Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
+        Assert.Contains("-Kind Test -Root $extractRoot -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
+        Assert.Contains("gh release create $tag", workflow);
+        Assert.Contains("--prerelease", workflow);
+        Assert.Contains("--target $env:GITHUB_SHA", workflow);
+        Assert.Contains("NOT RELEASE EVIDENCE", workflow);
+
+        var usesLines = workflow.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.All(usesLines, line => Assert.Matches(
+            new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
+            line));
     }
 
     [Fact]

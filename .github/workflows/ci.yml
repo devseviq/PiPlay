@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,8 +16,8 @@ concurrency:
 jobs:
   build-and-test:
     name: Build and test (Windows)
-    # This canonical pull-request job stays on a disposable hosted VM. Trusted main pushes and
-    # manual dispatches use the PiPlay runner label after PIPLAY_WINDOWS_RUNNER is configured;
+    # This canonical pull-request job stays on a disposable hosted VM. Trusted main pushes use
+    # the PiPlay runner label after PIPLAY_WINDOWS_RUNNER is configured;
     # leaving the variable unset is the safe hosted fallback while infrastructure is serviced.
     # A registered runner for a public repo must still be disposable: contributed workflows can
     # propose targeting its label directly, outside this job's routing expression.
@@ -50,52 +49,3 @@ jobs:
       - name: Run deterministic local CI gate
         shell: pwsh
         run: .\scripts\Test-LocalCI.ps1
-
-      - name: Build and validate downloadable test package
-        if: github.event_name == 'workflow_dispatch'
-        id: test-package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sourceStatus = @(& git status --porcelain --untracked-files=all)
-          if ($LASTEXITCODE -ne 0) { throw 'Could not verify source-tree cleanliness.' }
-          if (@($sourceStatus | Where-Object { $_ }).Count -ne 0) {
-            throw "Test packages require a clean source tree.`n$($sourceStatus -join "`n")"
-          }
-
-          $publishRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-test-package'
-          $publishLabel = "test-$env:GITHUB_SHA"
-          $nonReleaseReason = 'GitHub Actions test package; interactive verification pending on SND-DESK'
-          & .\scripts\Build-PiPlay.ps1 `
-            -Stage Publish `
-            -Configuration Release `
-            -Channel Stable `
-            -NoVersionBump `
-            -NoBuildNumberBump `
-            -PublishRoot $publishRoot `
-            -PublishLabel $publishLabel `
-            -NoLatest `
-            -NoVersionTable `
-            -StopProcessName '' `
-            -NonReleaseReason $nonReleaseReason
-          if ($LASTEXITCODE -ne 0) { throw "Test-package build failed (exit $LASTEXITCODE)." }
-
-          $payloadRoot = Join-Path $publishRoot $publishLabel
-          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
-          if ($LASTEXITCODE -ne 0) { throw "Packaged verification failed (exit $LASTEXITCODE)." }
-
-          $buildInfo = Get-Content -LiteralPath (Join-Path $payloadRoot 'build-info.json') -Raw |
-            ConvertFrom-Json
-          if ([string]$buildInfo.sourceCommit -cne $env:GITHUB_SHA) {
-            throw "Package sourceCommit does not match github.sha."
-          }
-          "payload=$payloadRoot" >> $env:GITHUB_OUTPUT
-
-      - name: Upload downloadable test package
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: PiPlay-test-${{ github.sha }}
-          path: ${{ steps.test-package.outputs.payload }}
-          if-no-files-found: error
-          retention-days: 90

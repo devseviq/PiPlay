@@ -31,7 +31,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:TestPackageReason =
-    'GitHub Actions test package; interactive verification pending on SND-DESK'
+    'GitHub test prerelease; interactive verification pending on SND-DESK'
 $script:ReleasePackageReason =
     'source commit, version stamps, and artifact hashes were captured from a clean tree'
 
