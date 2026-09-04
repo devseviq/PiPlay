@@ -389,11 +389,20 @@ public class ReleaseScriptPolicyTests
     public void Stable_tag_workflow_creates_a_permanent_verified_release_package()
     {
         var workflow = Script(".github/workflows/release.yml").Replace("\r\n", "\n");
+        var tagPolicy = Script(".github/scripts/Test-StableTagPolicy.ps1");
 
         Assert.Contains("tags:\n      - 'stable-v*'", workflow);
         Assert.Contains("contents: write", workflow);
         Assert.Contains("fetch-depth: 0", workflow);
         Assert.Contains("persist-credentials: false", workflow);
+        Assert.Contains("Require immutable Stable tags", workflow);
+        Assert.Equal(2, Regex.Matches(workflow, @"Test-StableTagPolicy\.ps1").Count);
+        Assert.Contains("repos/$Repository/rulesets?includes_parents=true", tagPolicy);
+        Assert.Contains("$detail.target -cne 'tag'", tagPolicy);
+        Assert.Contains("$detail.enforcement -cne 'active'", tagPolicy);
+        Assert.Contains("refs/tags/stable-v*", tagPolicy);
+        Assert.Contains("'deletion'", tagPolicy);
+        Assert.Contains("'update'", tagPolicy);
         Assert.Contains("stable-v(?<version>", workflow);
         Assert.Contains("-Stage Release", workflow);
         Assert.Contains("-Channel Stable", workflow);
@@ -402,6 +411,8 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("Test-DownloadedPackage.ps1", workflow);
         Assert.Contains("-Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
         Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
+        Assert.Contains("PiPlay-release-extracted-verification-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT", workflow);
+        Assert.Contains("& .\\scripts\\Test-DownloadedPackage.ps1 -Kind Release -Root $extractRoot", workflow);
         Assert.Contains("git ls-remote --tags origin", workflow);
         Assert.Contains("releaseEvidence", workflow);
         Assert.Contains("sourceCommit", workflow);

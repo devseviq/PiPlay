@@ -29,6 +29,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require immutable Stable tags
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .\.github\scripts\Test-StableTagPolicy.ps1
+
       - name: Set up .NET from global.json
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -102,9 +108,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
             throw "Expected archive not found: '$archive'."
           }
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-release-extracted-verification'
+          $extractRoot = Join-Path $env:RUNNER_TEMP "PiPlay-release-extracted-verification-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
-          & (Join-Path $extractRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          & .\scripts\Test-DownloadedPackage.ps1 -Kind Release -Root $extractRoot -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
           if ($LASTEXITCODE -ne 0) { throw "Extracted release verification failed (exit $LASTEXITCODE)." }
 
           $checksum = "$archive.sha256"
@@ -121,6 +127,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          & .\.github\scripts\Test-StableTagPolicy.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Stable tag policy verification failed (exit $LASTEXITCODE)." }
           $tag = $env:GITHUB_REF_NAME
           $remoteRefs = @(& git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
           if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -eq 0) {
