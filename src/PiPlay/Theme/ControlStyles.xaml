@@ -18,6 +18,80 @@
   <theme:ContrastBrushConverter x:Key="ContrastBrushConverter" />
   <theme:AccentWashBrushConverter x:Key="AccentWashBrushConverter" />
 
+  <!-- An inset ring stays visible inside rounded windows and clipped toolbar rows. -->
+  <Style x:Key="KeyboardFocusRing" TargetType="Control">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate>
+          <Border Margin="2" BorderBrush="{DynamicResource TextPrimary}" BorderThickness="2"
+                  CornerRadius="{DynamicResource RadiusButton}" IsHitTestVisible="False" />
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Horizontal settings slider: retain native Track, range commands and keyboard behavior. -->
+  <Style x:Key="DarkSlider" TargetType="Slider">
+    <Setter Property="Height" Value="28" />
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Slider">
+          <Grid Background="Transparent" Margin="0,2">
+            <Border Height="4" VerticalAlignment="Center" CornerRadius="{DynamicResource RadiusScrollbarThumb}"
+                    Background="{DynamicResource BorderStrong}" />
+            <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                   Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                   IsDirectionReversed="{TemplateBinding IsDirectionReversed}">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                  <RepeatButton.Template>
+                    <ControlTemplate TargetType="RepeatButton">
+                      <Grid Background="Transparent">
+                        <Border Height="4" VerticalAlignment="Center" CornerRadius="{DynamicResource RadiusScrollbarThumb}"
+                                Background="{DynamicResource AccentPrimary}" />
+                      </Grid>
+                    </ControlTemplate>
+                  </RepeatButton.Template>
+                </RepeatButton>
+              </Track.DecreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb Width="20" Height="24">
+                  <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                      <Grid Background="Transparent">
+                        <Ellipse x:Name="Knob" Width="14" Height="14" Fill="{DynamicResource TextPrimary}"
+                                 Stroke="{DynamicResource SurfaceBase}" StrokeThickness="2" />
+                      </Grid>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentPrimary}" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                          <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource AccentPrimary}" />
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Thumb.Template>
+                </Thumb>
+              </Track.Thumb>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                  <RepeatButton.Template>
+                    <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" /></ControlTemplate>
+                  </RepeatButton.Template>
+                </RepeatButton>
+              </Track.IncreaseRepeatButton>
+            </Track>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Base text -->
   <Style TargetType="TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
@@ -27,6 +101,7 @@
 
   <!-- Generic dark button (rounded, hover surface) -->
   <Style TargetType="Button" x:Key="DarkButton">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
     <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
     <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
     <Setter Property="BorderBrush" Value="Transparent" />
@@ -132,6 +207,7 @@
   <!-- Chrome icon button: 32x32 hit target, transparent, hover surface, rounded.
        Set Content to a glyph (Segoe Fluent / MDL2) or short text. -->
   <Style TargetType="Button" x:Key="IconButton">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
     <Setter Property="Width" Value="{DynamicResource DensityIconButtonSize}" />
     <Setter Property="Height" Value="{DynamicResource DensityIconButtonSize}" />
     <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
@@ -202,6 +278,7 @@
 
   <!-- Pin/Fade toggle: active = configurable glyph + subtle active border. -->
   <Style TargetType="ToggleButton" x:Key="PinToggle">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
     <Setter Property="Width" Value="{DynamicResource DensityIconButtonSize}" />
     <Setter Property="Height" Value="{DynamicResource DensityIconButtonSize}" />
     <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
@@ -376,6 +453,7 @@
   <!-- Dark combo box for profiles: dark closed control AND dark popup + items, with an
        intentional empty state (no profiles yet) rather than a blank light box (REQ-UI-01). -->
   <Style TargetType="ComboBox" x:Key="DarkComboBox">
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
     <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
     <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
     <Setter Property="BorderBrush" Value="{DynamicResource BorderSubtle}" />

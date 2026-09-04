@@ -19,6 +19,8 @@ Actual behavior is the source and tests named beside each contract. Architecture
 
 Source controls: navigation, URL/search, profiles, Pin, Auto, Settings, transfer, Show Popout. Popout controls: Settings, Fade, Pin, Expand/Restore, Close, move handle. Every opened popup, menu, dropdown, item container, and tooltip uses the dark theme; every icon-only control has an accessible name. (`MainWindow.xaml`, `PlayerWindow.xaml`, `ControlStyles.xaml`, UI tests.)
 
+Settings opens with Appearance, followed by Popout behaviour, then Privacy. Appearance previews live; **Done** keeps changes, while **Cancel**, close, and Escape discard the preview. Keyboard focus is visible on chrome controls and settings choices; sliders retain native range and keyboard commands. Corner choices are Follow theme, Square, Small round, and Round, independently of opacity. Soft Glass retains its translucent preset defaults. (`SettingsWindow.xaml`, `ControlStyles.xaml`, `PresentationPolishTests`.)
+
 ## 6. Auto, Fade, and Pin
 
 ### 6.1 Auto
@@ -196,7 +198,7 @@ Every icon-only control has an accessible name and keyboard focus. Pin/transfer 
 
 ## 21. Packaging and release
 
-Exact-source Stable publishing requires committed `VERSION`, `BUILD_NUMBER`, a clean tree, and a Stable deployment root supplied by `PIPLAY_STABLE_ROOT` or `-DeployRoot`. The verifier checks manifest hashes and source identity. Signing is optional through `-SignScript` and runs before hashes. (`Build-PiPlay.ps1`, `Publish-Stable.ps1`, `Verify-StableDeploy.ps1`.)
+SND-HOST owns source, builds, and publication; SND-DESK requires no repository and accepts packages only from GitHub Releases. Exact-source Stable publishing requires committed `VERSION`, `BUILD_NUMBER`, a clean tree, a Stable deployment root supplied by `PIPLAY_STABLE_ROOT` or `-DeployRoot`, and an active, exclusion-free GitHub tag ruleset for `refs/tags/stable-v*` that restricts updates and deletions with no bypass actors. The `PIPLAY_RELEASE_POLICY_TOKEN` Actions secret holds a fine-grained token scoped only to `devseviq/PiPlay`, with Administration write access and no Contents permission. Write access is required to expose ruleset bypass actors; the workflow uses this token solely to inspect tag policy, while `github.token` performs publication. Pushing the resulting `stable-vX.Y.Z-bN` tag produces a permanent GitHub Release ZIP from that exact tag; the workflow checks the provider rule before building and again immediately before publication. Manual `Publish test download` dispatch creates a uniquely tagged GitHub prerelease ZIP and SHA256 file for the selected exact commit. It atomically creates and verifies the tag before uploading a draft, verifies it again before making the prerelease visible, and requires the same exclusion-free/no-bypass protections for `refs/tags/test-*`. Test prereleases are explicitly non-release evidence and are never automatically deleted. Both downloaded payloads contain `scripts/Test-DownloadedPackage.ps1`, which binds caller-supplied GitHub identity to their complete manifest inventory, hashes, binary identity including the baked Stable channel, clean-source metadata, and test-versus-release evidence before UI smoke. Each ZIP is extracted and reverified with the trusted checkout verifier before publication. Signing is optional through `-SignScript` and runs before hashes. (`Build-PiPlay.ps1`, `Publish-Stable.ps1`, `Verify-StableDeploy.ps1`, `.github/workflows/ci.yml`, `.github/workflows/test-release.yml`, `.github/workflows/release.yml`.)
 
 ## 22. Quality gates
 
@@ -206,7 +208,7 @@ Automated gate: `scripts/Test-LocalCI.ps1`.
 
 ### 22.2 Deployed UI smoke
 
-`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the deployed executable, uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Needs an interactive desktop and WebView2.
+`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the selected executable, uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Downloaded packages enter it only through the standalone package verifier, with data and evidence paths outside the immutable package root. Needs an interactive desktop and WebView2.
 
 ### 22.3 End-user acceptance
 

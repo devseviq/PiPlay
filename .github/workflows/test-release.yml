@@ -1,0 +1,123 @@
+name: Publish test download
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: piplay-test-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-test-release:
+    name: Verify and publish test prerelease
+    runs-on: ${{ vars.PIPLAY_WINDOWS_RUNNER || 'windows-latest' }}
+    timeout-minutes: 25
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "true"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+    steps:
+      - name: Check out selected source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET from global.json
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up Node for executable DOM tests
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run deterministic source gate
+        shell: pwsh
+        run: .\scripts\Test-LocalCI.ps1
+
+      - name: Build and verify test release package
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headCommit = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $headCommit -cne $env:GITHUB_SHA) {
+            throw 'The checked-out commit and github.sha must be identical.'
+          }
+          $sourceStatus = @(& git status --porcelain --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or @($sourceStatus | Where-Object { $_ }).Count -ne 0) {
+            throw "Test release packages require a clean source tree.`n$($sourceStatus -join "`n")"
+          }
+
+          $publishRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-test-release-package'
+          $publishLabel = "test-$env:GITHUB_SHA"
+          $tag = "test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT"
+          $nonReleaseReason = 'GitHub test prerelease; interactive verification pending on SND-DESK'
+          & .\scripts\Build-PiPlay.ps1 `
+            -Stage Publish `
+            -Configuration Release `
+            -Channel Stable `
+            -NoVersionBump `
+            -NoBuildNumberBump `
+            -PublishRoot $publishRoot `
+            -PublishLabel $publishLabel `
+            -NoLatest `
+            -NoVersionTable `
+            -StopProcessName '' `
+            -NonReleaseReason $nonReleaseReason
+          if ($LASTEXITCODE -ne 0) { throw "Test-package build failed (exit $LASTEXITCODE)." }
+
+          $payloadRoot = Join-Path $publishRoot $publishLabel
+          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          if ($LASTEXITCODE -ne 0) { throw "Packaged verification failed (exit $LASTEXITCODE)." }
+
+          $buildInfo = Get-Content -LiteralPath (Join-Path $payloadRoot 'build-info.json') -Raw |
+            ConvertFrom-Json
+          if ([string]$buildInfo.sourceCommit -cne $env:GITHUB_SHA -or
+              $buildInfo.releaseEvidence -ne $false) {
+            throw 'Test metadata is not exact-source non-release evidence for github.sha.'
+          }
+
+          $assetRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-test-release-assets'
+          New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
+          $archive = Join-Path $assetRoot "PiPlay-$tag.zip"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $payloadRoot,
+            $archive,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false)
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP "PiPlay-test-extracted-verification-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+          & .\scripts\Test-DownloadedPackage.ps1 -Kind Test -Root $extractRoot -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          if ($LASTEXITCODE -ne 0) { throw "Extracted test release verification failed (exit $LASTEXITCODE)." }
+
+          $checksum = "$archive.sha256"
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([System.IO.Path]::GetFileName($archive))" |
+            Set-Content -LiteralPath $checksum -Encoding ascii -NoNewline
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "title=PiPlay test $($env:GITHUB_SHA.Substring(0, 12))" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub test prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
+          PIPLAY_RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          & .\.github\scripts\Publish-TestPrerelease.ps1 `
+            -Tag '${{ steps.package.outputs.tag }}' `
+            -Commit $env:GITHUB_SHA `
+            -Archive '${{ steps.package.outputs.archive }}' `
+            -Checksum '${{ steps.package.outputs.checksum }}' `
+            -Repository $env:GITHUB_REPOSITORY `
+            -Title '${{ steps.package.outputs.title }}'

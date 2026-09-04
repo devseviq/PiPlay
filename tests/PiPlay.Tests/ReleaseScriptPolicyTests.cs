@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -316,7 +317,7 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
-    public void Ci_keeps_pull_requests_hosted_and_trusted_events_variable_routed()
+    public void Ci_keeps_pull_requests_hosted_and_main_pushes_variable_routed()
     {
         var workflow = Script(".github/workflows/ci.yml");
         var normalized = workflow.Replace("\r\n", "\n");
@@ -324,7 +325,8 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("name: Build and test (Windows)", workflow);
         Assert.Contains("case(github.event_name == 'pull_request', 'windows-latest'", workflow);
         Assert.Contains("vars.PIPLAY_WINDOWS_RUNNER || 'windows-latest'", workflow);
-        Assert.Contains("push:\n    branches:\n      - main\n  workflow_dispatch:", normalized);
+        Assert.Contains("push:\n    branches:\n      - main", normalized);
+        Assert.DoesNotContain("workflow_dispatch:", normalized);
         Assert.DoesNotContain("\n    tags:", normalized);
         Assert.Contains("run: .\\scripts\\Test-LocalCI.ps1", workflow);
         Assert.Contains("persist-credentials: false", workflow);
@@ -339,6 +341,212 @@ public class ReleaseScriptPolicyTests
         Assert.All(usesLines, line => Assert.Matches(
             new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
             line));
+    }
+
+    [Fact]
+    public void Publish_payload_includes_standalone_download_validation()
+    {
+        var build = Script("scripts/Build-PiPlay.ps1");
+        var verifier = Script("scripts/Test-DownloadedPackage.ps1");
+
+        Assert.Contains("scripts\\Test-DownloadedPackage.ps1", build);
+        Assert.Contains("scripts\\Test-UiSmoke.ps1", build);
+        Assert.Contains("[ValidateSet('Test', 'Release')]", verifier);
+        Assert.Contains("[switch]$ValidateOnly", verifier);
+        Assert.Contains("[string]$ExpectedCommit", verifier);
+        Assert.Contains("[string]$ExpectedTag", verifier);
+        Assert.Contains("Resolve-ManifestArtifactPath", verifier);
+        Assert.Contains("Get-Sha256Hex", verifier);
+        Assert.Contains("AssemblyMetadataAttribute", verifier);
+        Assert.Contains("PiPlay.Channel", verifier);
+        Assert.Contains("sourceDirty must be false", verifier);
+        Assert.Contains("releaseEvidence must be false", verifier);
+        Assert.Contains("GitHub test prerelease; interactive verification pending on SND-DESK", verifier);
+        Assert.Contains("releaseEvidence must be true", verifier);
+        Assert.Contains("source commit, version stamps, and artifact hashes were captured from a clean tree", verifier);
+        Assert.Contains("PACKAGE VERIFIED", verifier);
+        Assert.Contains("PIPLAY_DATA_ROOT", verifier);
+        Assert.Contains("Assert-NoReparsePointComponents -Path $resolvedExternal", verifier);
+        Assert.Contains("Test-UiSmoke.ps1", verifier);
+    }
+
+    [Fact]
+    public void Manual_test_distribution_uses_only_a_unique_GitHub_prerelease()
+    {
+        var ciWorkflow = Script(".github/workflows/ci.yml");
+        var testReleasePath = Path.Combine(RepoRoot, ".github", "workflows", "test-release.yml");
+        var publisherPath = Path.Combine(RepoRoot, ".github", "scripts", "Publish-TestPrerelease.ps1");
+        Assert.True(File.Exists(testReleasePath), "The manual GitHub prerelease workflow is missing.");
+        Assert.True(File.Exists(publisherPath), "The test-prerelease publisher script is missing.");
+        var workflow = File.ReadAllText(testReleasePath).Replace("\r\n", "\n");
+        var publisher = File.ReadAllText(publisherPath);
+
+        Assert.DoesNotContain("actions/upload-artifact", ciWorkflow);
+        Assert.DoesNotContain("actions/upload-artifact", workflow);
+        Assert.Contains("workflow_dispatch:", workflow);
+        Assert.Contains("contents: write", workflow);
+        Assert.Contains("persist-credentials: false", workflow);
+        Assert.Contains("$headCommit -cne $env:GITHUB_SHA", workflow);
+        Assert.Contains("$publishLabel = \"test-$env:GITHUB_SHA\"", workflow);
+        Assert.Contains("test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT", workflow);
+        Assert.Contains("-Stage Publish", workflow);
+        Assert.Contains("-Channel Stable", workflow);
+        Assert.Contains("-NoVersionBump", workflow);
+        Assert.Contains("-NoBuildNumberBump", workflow);
+        Assert.Contains("-NonReleaseReason $nonReleaseReason", workflow);
+        Assert.Contains("-Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
+        Assert.Contains("CreateFromDirectory", workflow);
+        Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
+        Assert.Contains("-Kind Test -Root $extractRoot -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
+        Assert.Contains("Publish-TestPrerelease.ps1", workflow);
+        Assert.Contains("git/refs", publisher);
+        Assert.Contains("refs/tags/test-*", publisher);
+        Assert.Contains("--verify-tag", publisher);
+        Assert.Contains("--draft", publisher);
+        Assert.Contains("--draft=false", publisher);
+        Assert.DoesNotContain("--target", publisher);
+        Assert.Contains("NOT RELEASE EVIDENCE", publisher);
+        Assert.Contains("secrets.PIPLAY_RELEASE_POLICY_TOKEN", workflow);
+
+        var usesLines = workflow.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.All(usesLines, line => Assert.Matches(
+            new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
+            line));
+    }
+
+    [Fact]
+    public void Stable_tag_workflow_creates_a_permanent_verified_release_package()
+    {
+        var workflow = Script(".github/workflows/release.yml").Replace("\r\n", "\n");
+        var tagPolicy = Script(".github/scripts/Test-StableTagPolicy.ps1");
+
+        Assert.Contains("tags:\n      - 'stable-v*'", workflow);
+        Assert.Contains("contents: write", workflow);
+        Assert.Contains("fetch-depth: 0", workflow);
+        Assert.Contains("persist-credentials: false", workflow);
+        Assert.Contains("Require immutable Stable tags", workflow);
+        Assert.Equal(2, Regex.Matches(workflow, @"Test-StableTagPolicy\.ps1").Count);
+        Assert.Contains("repos/$Repository/rulesets?includes_parents=true", tagPolicy);
+        Assert.Contains("$detail.target -cne 'tag'", tagPolicy);
+        Assert.Contains("$detail.enforcement -cne 'active'", tagPolicy);
+        Assert.Contains("refs/tags/stable-v*", tagPolicy);
+        Assert.Contains("$excludePatterns.Count -ne 0", tagPolicy);
+        Assert.Contains("bypass_actors", tagPolicy);
+        Assert.Contains("'deletion'", tagPolicy);
+        Assert.Contains("'update'", tagPolicy);
+        Assert.Contains("secrets.PIPLAY_RELEASE_POLICY_TOKEN", workflow);
+        Assert.Contains("stable-v(?<version>", workflow);
+        Assert.Contains("-Stage Release", workflow);
+        Assert.Contains("-Channel Stable", workflow);
+        Assert.Contains("-NoVersionBump", workflow);
+        Assert.Contains("-NoBuildNumberBump", workflow);
+        Assert.Contains("Test-DownloadedPackage.ps1", workflow);
+        Assert.Contains("-Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
+        Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
+        Assert.Contains("PiPlay-release-extracted-verification-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT", workflow);
+        Assert.Contains("& .\\scripts\\Test-DownloadedPackage.ps1 -Kind Release -Root $extractRoot", workflow);
+        Assert.Contains("git ls-remote --tags origin", workflow);
+        Assert.Contains("releaseEvidence", workflow);
+        Assert.Contains("sourceCommit", workflow);
+        Assert.Contains("gh release create", workflow);
+        Assert.Contains("--verify-tag", workflow);
+
+        var usesLines = workflow.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.All(usesLines, line => Assert.Matches(
+            new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
+            line));
+    }
+
+    [Fact]
+    public async Task Stable_tag_policy_rejects_exclusions_bypasses_and_hidden_bypass_state()
+    {
+        const string valid = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string broadExclusion = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":["refs/tags/*"]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string alwaysBypass = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[{"actor_type":"RepositoryRole","actor_id":5,"bypass_mode":"always"}],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string hiddenBypassState = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string nullBypassState = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":null,"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+
+        var validResult = await RunStableTagPolicyAsync(valid);
+        Assert.True(validResult.ExitCode == 0,
+            $"Valid policy failed.{Environment.NewLine}{validResult.Error}{Environment.NewLine}{validResult.Output}");
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(broadExclusion)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(alwaysBypass)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(hiddenBypassState)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(nullBypassState)).ExitCode);
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunStableTagPolicyAsync(string detailJson)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "PiPlayTagPolicyTest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var detailPath = Path.Combine(tempRoot, "detail.json");
+            var fakeGh = Path.Combine(tempRoot, "gh.cmd");
+            await File.WriteAllTextAsync(detailPath, detailJson);
+            await File.WriteAllTextAsync(fakeGh, """
+                @echo off
+                echo %* | %SystemRoot%\System32\findstr.exe /C:"includes_parents" >nul
+                if not errorlevel 1 (
+                  echo [{"id":42}]
+                  exit /b 0
+                )
+                type "%PIPLAY_TEST_RULESET_DETAIL%"
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.Environment["PATH"] = tempRoot + Path.PathSeparator +
+                (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["PIPLAY_TEST_RULESET_DETAIL"] = detailPath;
+            startInfo.Environment["GH_TOKEN"] = "test-token";
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(RepoRoot, ".github", "scripts", "Test-StableTagPolicy.ps1"));
+            startInfo.ArgumentList.Add("-Repository");
+            startInfo.ArgumentList.Add("espensev/PiPlay");
+
+            using var process = new Process { StartInfo = startInfo };
+            Assert.True(process.Start(), "Stable tag policy test process did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            var exitTask = process.WaitForExitAsync();
+            var completed = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(15)));
+            if (completed != exitTask)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best-effort timeout cleanup */ }
+                Assert.Fail("Stable tag policy test exceeded 15 seconds.");
+            }
+            await exitTask;
+            return (process.ExitCode, await output, await error);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
     }
 
     [Theory]

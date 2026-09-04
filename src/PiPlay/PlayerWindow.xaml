@@ -56,23 +56,23 @@
 
         <!-- Reserve the outer resize band; otherwise Close consumes the entire top-right corner. -->
         <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0">
-          <Button x:Name="SettingsButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+          <Button x:Name="SettingsButton" Style="{StaticResource IconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                   Content="&#xE713;" Click="SettingsButton_Click" ToolTip="Settings"
                   AutomationProperties.Name="Settings" />
-          <ToggleButton x:Name="FadeToggle" Style="{StaticResource PinToggle}" Width="30" Height="30"
+          <ToggleButton x:Name="FadeToggle" Style="{StaticResource PinToggle}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                         Content="&#xE7B3;" Click="FadeToggle_Click"
-                        ToolTip="Fade the top bar when idle; Settings controls whether its row also hides"
+                        ToolTip="Fade the top bar when idle; Settings controls whether its row also hides. Move to the top edge to show it again."
                         AutomationProperties.Name="Fade top bar when idle" />
-          <ToggleButton x:Name="PinToggle" Style="{StaticResource PinToggle}" Width="30" Height="30"
+          <ToggleButton x:Name="PinToggle" Style="{StaticResource PinToggle}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                         Content="&#xE840;" Click="PinToggle_Click" ToolTip="Pin on top"
                         AutomationProperties.Name="Pin popout on top" />
           <!-- Expand/restore (overhaul Task 4): the one reliable expand path, native and
                mode-agnostic. State-neutral UIA name (MaximizeButton precedent): the glyph and
                tooltip flip Expand/Restore in code, the name must stay true in both states. -->
-          <Button x:Name="ExpandButton" Style="{StaticResource IconButton}" Width="30" Height="30"
+          <Button x:Name="ExpandButton" Style="{StaticResource IconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                   Content="&#xE922;" Click="ExpandButton_Click" ToolTip="Expand popout"
                   AutomationProperties.Name="Expand or restore popout" />
-          <Button x:Name="CloseButton" Style="{StaticResource CloseIconButton}" Width="30" Height="30"
+          <Button x:Name="CloseButton" Style="{StaticResource CloseIconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                   Content="&#xE8BB;" Click="CloseButton_Click" ToolTip="Close popout (return video)"
                   AutomationProperties.Name="Close popout" />
         </StackPanel>
@@ -100,7 +100,7 @@
                 ToolTip="Reopen this video as the normal YouTube page"
                 AutomationProperties.Name="Open normal page" />
         <Button x:Name="ErrorDismissButton" Grid.Column="2" Style="{StaticResource CloseIconButton}"
-                Width="30" Height="30" Margin="6,0,0,0" Content="&#xE711;"
+                Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}" Margin="6,0,0,0" Content="&#xE711;"
                 Click="ErrorDismissButton_Click" ToolTip="Dismiss this message"
                 AutomationProperties.Name="Dismiss player error" />
       </Grid>

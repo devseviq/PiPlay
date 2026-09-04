@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,8 +16,8 @@ concurrency:
 jobs:
   build-and-test:
     name: Build and test (Windows)
-    # This canonical pull-request job stays on a disposable hosted VM. Trusted main pushes and
-    # manual dispatches use the PiPlay runner label after PIPLAY_WINDOWS_RUNNER is configured;
+    # This canonical pull-request job stays on a disposable hosted VM. Trusted main pushes use
+    # the PiPlay runner label after PIPLAY_WINDOWS_RUNNER is configured;
     # leaving the variable unset is the safe hosted fallback while infrastructure is serviced.
     # A registered runner for a public repo must still be disposable: contributed workflows can
     # propose targeting its label directly, outside this job's routing expression.

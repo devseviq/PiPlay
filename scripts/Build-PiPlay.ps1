@@ -67,7 +67,9 @@ $ProjectRelativePath = "src\PiPlay\PiPlay.csproj"
 $PublishExtras = @(
     "README.md",
     "docs\CHANGELOG.md",
-    "docs\YouTube_Compliance.md"
+    "docs\YouTube_Compliance.md",
+    "scripts\Test-DownloadedPackage.ps1",
+    "scripts\Test-UiSmoke.ps1"
 )
 
 $script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)

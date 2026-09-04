@@ -1,0 +1,156 @@
+name: Publish Stable download
+
+on:
+  push:
+    tags:
+      - 'stable-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: piplay-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    name: Verify and publish Stable package
+    runs-on: ${{ vars.PIPLAY_WINDOWS_RUNNER || 'windows-latest' }}
+    timeout-minutes: 25
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "true"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require immutable Stable tags
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
+        run: .\.github\scripts\Test-StableTagPolicy.ps1
+
+      - name: Set up .NET from global.json
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up Node for executable DOM tests
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run deterministic source gate
+        shell: pwsh
+        run: .\scripts\Test-LocalCI.ps1
+
+      - name: Validate tag and build release package
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $match = [regex]::Match($tag, '^stable-v(?<version>[0-9]+\.[0-9]+\.[0-9]+)-b(?<build>[0-9]+)$')
+          if (-not $match.Success) { throw "Invalid Stable tag: '$tag'." }
+
+          $version = (Get-Content -LiteralPath .\VERSION -Raw).Trim()
+          $buildNumber = (Get-Content -LiteralPath .\BUILD_NUMBER -Raw).Trim()
+          if ($version -cne $match.Groups['version'].Value -or
+              $buildNumber -cne $match.Groups['build'].Value) {
+            throw "Tag '$tag' does not match VERSION $version and BUILD_NUMBER $buildNumber."
+          }
+
+          $headCommit = (& git rev-parse HEAD).Trim()
+          $tagCommit = (& git rev-list -n 1 $tag).Trim()
+          if ($LASTEXITCODE -ne 0 -or $headCommit -cne $tagCommit -or
+              $headCommit -cne $env:GITHUB_SHA) {
+            throw 'The checked-out commit, tag commit, and github.sha must be identical.'
+          }
+          $sourceStatus = @(& git status --porcelain --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or @($sourceStatus | Where-Object { $_ }).Count -ne 0) {
+            throw 'Stable release packages require a clean tagged source tree.'
+          }
+
+          $publishRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-release-package'
+          & .\scripts\Build-PiPlay.ps1 `
+            -Stage Release `
+            -Configuration Release `
+            -Channel Stable `
+            -NoVersionBump `
+            -NoBuildNumberBump `
+            -PublishRoot $publishRoot `
+            -PublishLabel $tag `
+            -NoLatest `
+            -NoVersionTable `
+            -StopProcessName ''
+          if ($LASTEXITCODE -ne 0) { throw "Release-package build failed (exit $LASTEXITCODE)." }
+
+          $payloadRoot = Join-Path $publishRoot $tag
+          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          if ($LASTEXITCODE -ne 0) { throw "Packaged verification failed (exit $LASTEXITCODE)." }
+          & .\scripts\Test-PublishMetadata.ps1 -PublishRoot $publishRoot -PublishLabel $tag
+          if ($LASTEXITCODE -ne 0) { throw "Publish metadata validation failed (exit $LASTEXITCODE)." }
+
+          $buildInfo = Get-Content -LiteralPath (Join-Path $payloadRoot 'build-info.json') -Raw |
+            ConvertFrom-Json
+          if ($buildInfo.releaseEvidence -ne $true -or
+              [string]$buildInfo.sourceCommit -cne $env:GITHUB_SHA) {
+            throw 'Release metadata is not exact-source release evidence for github.sha.'
+          }
+
+          $archive = Join-Path $publishRoot "archive\PiPlay-$tag.zip"
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Expected archive not found: '$archive'."
+          }
+          $extractRoot = Join-Path $env:RUNNER_TEMP "PiPlay-release-extracted-verification-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+          & .\scripts\Test-DownloadedPackage.ps1 -Kind Release -Root $extractRoot -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          if ($LASTEXITCODE -ne 0) { throw "Extracted release verification failed (exit $LASTEXITCODE)." }
+
+          $checksum = "$archive.sha256"
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([System.IO.Path]::GetFileName($archive))" |
+            Set-Content -LiteralPath $checksum -Encoding ascii -NoNewline
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+          "title=PiPlay v$version build $buildNumber" >> $env:GITHUB_OUTPUT
+
+      - name: Create permanent GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
+          PIPLAY_RELEASE_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\.github\scripts\Test-StableTagPolicy.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Stable tag policy verification failed (exit $LASTEXITCODE)." }
+          $env:GH_TOKEN = $env:PIPLAY_RELEASE_TOKEN
+          $tag = $env:GITHUB_REF_NAME
+          $remoteRefs = @(& git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -eq 0) {
+            throw "Could not verify remote Stable tag '$tag'."
+          }
+          $peeled = @($remoteRefs | Where-Object { $_ -match "refs/tags/$([regex]::Escape($tag))\^\{\}$" })
+          $selectedRef = if ($peeled.Count -eq 1) { $peeled[0] } else { $remoteRefs[0] }
+          $remoteCommit = ($selectedRef -split '\s+')[0]
+          if ($remoteCommit -cne $env:GITHUB_SHA) {
+            throw "Remote Stable tag '$tag' moved away from verified commit $env:GITHUB_SHA."
+          }
+          & gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "GitHub Release already exists for '$env:GITHUB_REF_NAME'."
+          }
+          & gh release create $tag `
+            '${{ steps.package.outputs.archive }}' `
+            '${{ steps.package.outputs.checksum }}' `
+            --repo $env:GITHUB_REPOSITORY `
+            --verify-tag `
+            --generate-notes `
+            --title '${{ steps.package.outputs.title }}'
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release creation failed (exit $LASTEXITCODE)." }
