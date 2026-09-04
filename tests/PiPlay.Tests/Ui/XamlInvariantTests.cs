@@ -154,14 +154,14 @@ public class XamlInvariantTests
         var scroll = doc.Descendants(XamlTestFiles.Pres + "ScrollViewer")
             .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == "SettingsScroll");
 
-        // Every section header scrolls; the order is the spec's Privacy/Appearance/Advanced.
+        // Everyday appearance and Popout controls precede destructive maintenance actions.
         var headers = scroll.Descendants()
             .Select(e => e.Attribute(XamlTestFiles.X + "Name")?.Value)
             .Where(n => n is not null && n.EndsWith("SectionHeader"))
             .ToArray();
         Assert.Equal(new[]
         {
-            "PrivacySectionHeader", "AppearanceSectionHeader", "AdvancedSectionHeader",
+            "AppearanceSectionHeader", "AdvancedSectionHeader", "PrivacySectionHeader",
         }, headers);
 
         // The title bar must NOT scroll away (CloseButton stays reachable at any content height).
@@ -194,8 +194,9 @@ public class XamlInvariantTests
             .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == "ThemeHintText")
             .Attribute("Text")?.Value;
 
-        Assert.Contains("Presets, accent, corners, and opacity preview live", hint);
-        Assert.Contains("Done keeps the changes", hint);
+        Assert.Contains("Preview your changes here", hint);
+        Assert.Contains("Done keeps them", hint);
+        Assert.Contains("Cancel restores your previous look", hint);
         Assert.DoesNotContain("chips", hint, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -281,7 +282,7 @@ public class XamlInvariantTests
         Assert.Equal("Bring video back", button.Attribute("AutomationProperties.Name")?.Value);
         Assert.Contains("Return playback", button.Attribute("ToolTip")?.Value);
 
-        Assert.Equal("Show popout", show.Attribute("Content")?.Value);
+        Assert.Equal("Show Popout", show.Attribute("Content")?.Value);
         Assert.Equal("{StaticResource DarkButton}", show.Attribute("Style")?.Value);
         Assert.Equal("PlaceholderShowPopoutButton_Click", show.Attribute("Click")?.Value);
         Assert.NotEqual(show.Attribute("Click")?.Value, button.Attribute("Click")?.Value);

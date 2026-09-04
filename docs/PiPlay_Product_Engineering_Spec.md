@@ -19,6 +19,8 @@ Actual behavior is the source and tests named beside each contract. Architecture
 
 Source controls: navigation, URL/search, profiles, Pin, Auto, Settings, transfer, Show Popout. Popout controls: Settings, Fade, Pin, Expand/Restore, Close, move handle. Every opened popup, menu, dropdown, item container, and tooltip uses the dark theme; every icon-only control has an accessible name. (`MainWindow.xaml`, `PlayerWindow.xaml`, `ControlStyles.xaml`, UI tests.)
 
+Settings opens with Appearance, followed by Popout behaviour, then Privacy. Appearance previews live; **Done** keeps changes, while **Cancel**, close, and Escape discard the preview. Keyboard focus is visible on chrome controls and settings choices; sliders retain native range and keyboard commands. Corner choices are Follow theme, Square, Small round, and Round, independently of opacity. Soft Glass retains its translucent preset defaults. (`SettingsWindow.xaml`, `ControlStyles.xaml`, `PresentationPolishTests`.)
+
 ## 6. Auto, Fade, and Pin
 
 ### 6.1 Auto

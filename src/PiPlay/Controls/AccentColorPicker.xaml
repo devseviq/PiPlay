@@ -42,12 +42,13 @@
       <StackPanel Grid.Column="2">
         <TextBlock Text="Brightness" FontSize="12"
                    Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4" />
-        <Slider x:Name="ValueSlider" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.1"
+        <Slider Style="{StaticResource DarkSlider}" x:Name="ValueSlider" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.1"
                 IsMoveToPointEnabled="True" ValueChanged="ValueSlider_ValueChanged"
                 ToolTip="Accent brightness"
                 AutomationProperties.Name="Accent brightness" />
 
         <Grid Margin="0,10,0,0">
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="8" />
@@ -55,13 +56,16 @@
             <ColumnDefinition Width="8" />
             <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
-          <TextBox x:Name="RInput" Grid.Column="0" Style="{StaticResource DarkTextBox}"
+          <TextBlock Grid.Column="0" Text="Red" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4" />
+          <TextBox Grid.Row="1" x:Name="RInput" Grid.Column="0" Style="{StaticResource DarkTextBox}"
                    TextChanged="RgbInput_TextChanged" ToolTip="Red channel 0-255"
                    AutomationProperties.Name="Red channel" />
-          <TextBox x:Name="GInput" Grid.Column="2" Style="{StaticResource DarkTextBox}"
+          <TextBlock Grid.Column="2" Text="Green" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4" />
+          <TextBox Grid.Row="1" x:Name="GInput" Grid.Column="2" Style="{StaticResource DarkTextBox}"
                    TextChanged="RgbInput_TextChanged" ToolTip="Green channel 0-255"
                    AutomationProperties.Name="Green channel" />
-          <TextBox x:Name="BInput" Grid.Column="4" Style="{StaticResource DarkTextBox}"
+          <TextBlock Grid.Column="4" Text="Blue" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4" />
+          <TextBox Grid.Row="1" x:Name="BInput" Grid.Column="4" Style="{StaticResource DarkTextBox}"
                    TextChanged="RgbInput_TextChanged" ToolTip="Blue channel 0-255"
                    AutomationProperties.Name="Blue channel" />
         </Grid>

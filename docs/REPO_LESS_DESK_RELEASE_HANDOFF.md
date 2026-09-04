@@ -5,6 +5,9 @@ SND-DESK acceptance flow. The product contract remains
 [`PiPlay_Product_Engineering_Spec.md`](PiPlay_Product_Engineering_Spec.md); this
 file records the resumable checkpoint, activation gates, and operator commands.
 
+The delivery repository is `devseviq/PiPlay` (`origin`). The upstream repository
+is not the target for these workflows or release downloads.
+
 ## Authority and boundaries
 
 - SND-HOST owns the repository, feature branches, builds, GitHub publication,
@@ -196,10 +199,10 @@ Before dispatching either publication workflow, verify live provider state:
 Useful read-only checks after authentication:
 
 ```powershell
-gh secret list --app actions --repo espensev/PiPlay
-gh workflow list --repo espensev/PiPlay
-gh api repos/espensev/PiPlay/actions/permissions/workflow
-gh api --paginate 'repos/espensev/PiPlay/rulesets?includes_parents=true'
+gh secret list --app actions --repo devseviq/PiPlay
+gh workflow list --repo devseviq/PiPlay
+gh api repos/devseviq/PiPlay/actions/permissions/workflow
+gh api --paginate 'repos/devseviq/PiPlay/rulesets?includes_parents=true'
 ```
 
 Secret listing confirms only the name, not that its value or permissions are
@@ -217,8 +220,8 @@ After the PR is merged and local `origin/main` is refreshed:
 ```powershell
 git fetch --prune origin
 $expectedCommit = (git rev-parse origin/main).Trim()
-gh workflow run 'Publish test download' --repo espensev/PiPlay --ref main
-gh run list --repo espensev/PiPlay --workflow 'Publish test download' `
+gh workflow run 'Publish test download' --repo devseviq/PiPlay --ref main
+gh run list --repo devseviq/PiPlay --workflow 'Publish test download' `
     --event workflow_dispatch --limit 5 `
     --json databaseId,headSha,status,conclusion,url
 ```
