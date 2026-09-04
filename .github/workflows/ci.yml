@@ -81,7 +81,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Test-package build failed (exit $LASTEXITCODE)." }
 
           $payloadRoot = Join-Path $publishRoot $publishLabel
-          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Test -ValidateOnly
+          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
           if ($LASTEXITCODE -ne 0) { throw "Packaged verification failed (exit $LASTEXITCODE)." }
 
           $buildInfo = Get-Content -LiteralPath (Join-Path $payloadRoot 'build-info.json') -Raw |

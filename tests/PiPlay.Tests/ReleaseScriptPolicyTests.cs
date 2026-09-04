@@ -351,14 +351,19 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("scripts\\Test-UiSmoke.ps1", build);
         Assert.Contains("[ValidateSet('Test', 'Release')]", verifier);
         Assert.Contains("[switch]$ValidateOnly", verifier);
+        Assert.Contains("[string]$ExpectedCommit", verifier);
+        Assert.Contains("[string]$ExpectedTag", verifier);
         Assert.Contains("Resolve-ManifestArtifactPath", verifier);
         Assert.Contains("Get-Sha256Hex", verifier);
+        Assert.Contains("AssemblyMetadataAttribute", verifier);
+        Assert.Contains("PiPlay.Channel", verifier);
         Assert.Contains("sourceDirty must be false", verifier);
         Assert.Contains("releaseEvidence must be false", verifier);
         Assert.Contains("releaseEvidence must be true", verifier);
         Assert.Contains("source commit, version stamps, and artifact hashes were captured from a clean tree", verifier);
         Assert.Contains("PACKAGE VERIFIED", verifier);
         Assert.Contains("PIPLAY_DATA_ROOT", verifier);
+        Assert.Contains("Assert-NoReparsePointComponents -Path $resolvedExternal", verifier);
         Assert.Contains("Test-UiSmoke.ps1", verifier);
     }
 
@@ -374,7 +379,7 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("-NoBuildNumberBump", workflow);
         Assert.Contains("-NonReleaseReason $nonReleaseReason", workflow);
         Assert.Contains("Test-DownloadedPackage.ps1", workflow);
-        Assert.Contains("-Kind Test -ValidateOnly", workflow);
+        Assert.Contains("-Kind Test -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
         Assert.Contains("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow);
         Assert.Contains("PiPlay-test-${{ github.sha }}", workflow);
         Assert.DoesNotContain("gh release create", workflow);
@@ -395,7 +400,9 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("-NoVersionBump", workflow);
         Assert.Contains("-NoBuildNumberBump", workflow);
         Assert.Contains("Test-DownloadedPackage.ps1", workflow);
-        Assert.Contains("-Kind Release -ValidateOnly", workflow);
+        Assert.Contains("-Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
+        Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
+        Assert.Contains("git ls-remote --tags origin", workflow);
         Assert.Contains("releaseEvidence", workflow);
         Assert.Contains("sourceCommit", workflow);
         Assert.Contains("gh release create", workflow);

@@ -86,7 +86,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Release-package build failed (exit $LASTEXITCODE)." }
 
           $payloadRoot = Join-Path $publishRoot $tag
-          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Release -ValidateOnly
+          & (Join-Path $payloadRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
           if ($LASTEXITCODE -ne 0) { throw "Packaged verification failed (exit $LASTEXITCODE)." }
           & .\scripts\Test-PublishMetadata.ps1 -PublishRoot $publishRoot -PublishLabel $tag
           if ($LASTEXITCODE -ne 0) { throw "Publish metadata validation failed (exit $LASTEXITCODE)." }
@@ -102,6 +102,11 @@ jobs:
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
             throw "Expected archive not found: '$archive'."
           }
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-release-extracted-verification'
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
+          & (Join-Path $extractRoot 'scripts\Test-DownloadedPackage.ps1') -Kind Release -ExpectedTag $tag -ExpectedCommit $env:GITHUB_SHA -ValidateOnly
+          if ($LASTEXITCODE -ne 0) { throw "Extracted release verification failed (exit $LASTEXITCODE)." }
+
           $checksum = "$archive.sha256"
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $([System.IO.Path]::GetFileName($archive))" |
@@ -116,11 +121,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          & gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY 2>$null
+          $tag = $env:GITHUB_REF_NAME
+          $remoteRefs = @(& git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -eq 0) {
+            throw "Could not verify remote Stable tag '$tag'."
+          }
+          $peeled = @($remoteRefs | Where-Object { $_ -match "refs/tags/$([regex]::Escape($tag))\^\{\}$" })
+          $selectedRef = if ($peeled.Count -eq 1) { $peeled[0] } else { $remoteRefs[0] }
+          $remoteCommit = ($selectedRef -split '\s+')[0]
+          if ($remoteCommit -cne $env:GITHUB_SHA) {
+            throw "Remote Stable tag '$tag' moved away from verified commit $env:GITHUB_SHA."
+          }
+          & gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             throw "GitHub Release already exists for '$env:GITHUB_REF_NAME'."
           }
-          & gh release create $env:GITHUB_REF_NAME `
+          & gh release create $tag `
             '${{ steps.package.outputs.archive }}' `
             '${{ steps.package.outputs.checksum }}' `
             --repo $env:GITHUB_REPOSITORY `

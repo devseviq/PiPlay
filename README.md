@@ -27,10 +27,11 @@ SND-DESK has no repository checkout. It downloads either a temporary `PiPlay-tes
 Manually dispatch the `CI` workflow for the commit to test. Download and extract its `PiPlay-test-<commit>` artifact on SND-DESK, open PowerShell 7 in the extracted directory, and run:
 
 ```powershell
-pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test
+$commit = '<40-character commit from the artifact name>'
+pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ExpectedCommit $commit
 ```
 
-The command verifies the complete package before launching the automated UI smoke. Test packages are explicitly marked as non-release evidence and expire with GitHub Actions artifact retention.
+The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test packages are explicitly marked as non-release evidence and expire with GitHub Actions artifact retention. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
 
 ## Stable acceptance
 
@@ -47,7 +48,15 @@ pwsh -NoProfile -File .\scripts\Test-UiSmoke.ps1 -ExePath (Join-Path $stableRoot
 After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. On SND-DESK, extract the ZIP and run:
 
 ```powershell
-pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Release
+$tag = '<stable-vX.Y.Z-bN from the GitHub Release page>'
+$zip = ".\PiPlay-$tag.zip"
+$checksum = "$zip.sha256"
+$expectedHash = ((Get-Content -LiteralPath $checksum -Raw) -split '\s+')[0]
+$actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+if ($actualHash -ine $expectedHash) { throw 'Downloaded Stable ZIP hash mismatch.' }
+Expand-Archive -LiteralPath $zip -DestinationPath ".\PiPlay-$tag"
+Set-Location -LiteralPath ".\PiPlay-$tag"
+pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Release -ExpectedTag $tag
 ```
 
 Do not use source or `bin` output as release evidence. On the verified downloaded copy: pop out a playing video and listen through launch and return/close (Q-1); repeat once with a playlist or mix when available; record unavailable ads/account/profile states as not run.

@@ -8,9 +8,9 @@
   and launches nothing. Otherwise it runs the packaged UI smoke with data and evidence outside the
   immutable package root.
 .EXAMPLE
-  pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ValidateOnly
+  pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ExpectedCommit <sha> -ValidateOnly
 .EXAMPLE
-  pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Release
+  pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Release -ExpectedTag stable-v1.2.3-b45
 #>
 [CmdletBinding()]
 param(
@@ -18,6 +18,8 @@ param(
     [ValidateSet('Test', 'Release')]
     [string]$Kind,
     [string]$Root,
+    [string]$ExpectedCommit,
+    [string]$ExpectedTag,
     [switch]$ValidateOnly,
     [string]$EvidenceDir,
     [string]$DataRoot,
@@ -82,10 +84,10 @@ function Resolve-FullyQualifiedDirectory {
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $resolved = [System.IO.Path]::GetFullPath($Path)
-    if (-not [System.IO.Path]::IsPathFullyQualified($resolved)) {
+    if (-not [System.IO.Path]::IsPathFullyQualified($Path)) {
         throw "$Name must be fully qualified: '$Path'."
     }
+    $resolved = [System.IO.Path]::GetFullPath($Path)
     $trimmed = $resolved.TrimEnd([char[]]@('\', '/'))
     $rootPath = [System.IO.Path]::GetPathRoot($resolved).TrimEnd([char[]]@('\', '/'))
     if ($trimmed -ieq $rootPath) { throw "$Name must be below a filesystem root." }
@@ -153,6 +155,29 @@ function Resolve-ManifestArtifactPath {
     return $resolved
 }
 
+function Resolve-ExternalDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$PackageRoot
+    )
+
+    if (-not [System.IO.Path]::IsPathFullyQualified($Path)) {
+        throw "$Name must be fully qualified: '$Path'."
+    }
+    $resolvedExternal = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]@('\', '/'))
+    Assert-NoReparsePointComponents -Path $resolvedExternal -Name $Name
+    if (Test-PathsOverlap -First $resolvedExternal -Second $PackageRoot) {
+        throw "$Name must not overlap the immutable package root."
+    }
+    New-Item -ItemType Directory -Path $resolvedExternal -Force | Out-Null
+    Assert-NoReparsePointComponents -Path $resolvedExternal -Name $Name
+    if (Test-PathsOverlap -First $resolvedExternal -Second $PackageRoot) {
+        throw "$Name must not overlap the immutable package root."
+    }
+    return $resolvedExternal
+}
+
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = Split-Path -Parent $PSScriptRoot
 }
@@ -192,6 +217,15 @@ if (@($buildInfo.sourceDirtyEntries).Count -ne 0) {
 }
 
 if ($Kind -eq 'Test') {
+    if ($ExpectedCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'Test packages require -ExpectedCommit from the GitHub artifact name.'
+    }
+    if ([string]$buildInfo.sourceCommit -ine $ExpectedCommit) {
+        throw 'Package sourceCommit does not match -ExpectedCommit.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedTag)) {
+        throw '-ExpectedTag is valid only for Release packages.'
+    }
     if ($buildInfo.releaseEvidence -isnot [bool] -or $buildInfo.releaseEvidence) {
         throw 'Test package releaseEvidence must be false.'
     }
@@ -204,6 +238,13 @@ if ($Kind -eq 'Test') {
     }
 }
 else {
+    if ([string]::IsNullOrWhiteSpace($ExpectedTag)) {
+        throw 'Release packages require -ExpectedTag from the GitHub Release page.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedCommit) -and
+        ([string]$buildInfo.sourceCommit -ine $ExpectedCommit)) {
+        throw 'Package sourceCommit does not match -ExpectedCommit.'
+    }
     if ($buildInfo.releaseEvidence -isnot [bool] -or -not $buildInfo.releaseEvidence) {
         throw 'Release package releaseEvidence must be true.'
     }
@@ -213,6 +254,9 @@ else {
     $expectedLabel = "stable-v$($buildInfo.version)-b$($buildInfo.buildNumber)"
     if ([string]$buildInfo.publishLabel -cne $expectedLabel) {
         throw "Release package publishLabel must equal '$expectedLabel'."
+    }
+    if ($ExpectedTag -cne $expectedLabel) {
+        throw "Package identity '$expectedLabel' does not match -ExpectedTag '$ExpectedTag'."
     }
 }
 
@@ -268,8 +312,24 @@ $expectedFileVersion = "$($buildInfo.version).$($buildInfo.buildNumber)"
 if ($fileVersion.FileVersion -ne $expectedFileVersion) {
     throw "PiPlay.exe FileVersion '$($fileVersion.FileVersion)' does not match '$expectedFileVersion'."
 }
+if ([string]$buildInfo.fileVersion -ne $fileVersion.FileVersion) {
+    throw "PiPlay.exe FileVersion does not match build-info.json fileVersion."
+}
 if ($fileVersion.ProductVersion -ne [string]$buildInfo.productVersion) {
     throw "PiPlay.exe ProductVersion does not match build-info.json."
+}
+
+$dllPath = Join-Path $packageRoot 'PiPlay.dll'
+if (-not (Test-Path -LiteralPath $dllPath -PathType Leaf)) {
+    throw 'Downloaded package is missing PiPlay.dll.'
+}
+$assembly = [System.Reflection.Assembly]::LoadFile($dllPath)
+$channelAttributes = @($assembly.GetCustomAttributes(
+    [System.Reflection.AssemblyMetadataAttribute], $false) | Where-Object {
+        $_.Key -ceq 'PiPlay.Channel'
+    })
+if ($channelAttributes.Count -ne 1 -or $channelAttributes[0].Value -cne 'Stable') {
+    throw "PiPlay.dll AssemblyMetadataAttribute PiPlay.Channel must be 'Stable'."
 }
 
 Write-Host "PACKAGE VERIFIED: $Kind v$($buildInfo.version) b$($buildInfo.buildNumber) @ $($buildInfo.sourceCommit)" -ForegroundColor Green
@@ -279,21 +339,16 @@ if ($Kind -eq 'Test') {
 if ($ValidateOnly) { return }
 
 if ([string]::IsNullOrWhiteSpace($EvidenceDir)) {
-    $EvidenceDir = Join-Path ([System.IO.Path]::GetTempPath()) "PiPlayUiSmoke\$Kind-$($buildInfo.sourceCommit.Substring(0, 12))"
+    $EvidenceDir = Join-Path ([System.IO.Path]::GetTempPath()) `
+        "PiPlayUiSmoke\$Kind-$($buildInfo.sourceCommit.Substring(0, 12))-$([Guid]::NewGuid().ToString('N'))"
 }
 if ([string]::IsNullOrWhiteSpace($DataRoot)) {
     $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-    $DataRoot = Join-Path $localAppData "PiPlay\DownloadedPackages\$Kind\$($buildInfo.sourceCommit)"
+    $DataRoot = Join-Path $localAppData `
+        "PiPlay\DownloadedPackages\$Kind\$($buildInfo.sourceCommit)\$([Guid]::NewGuid().ToString('N'))"
 }
-foreach ($external in @(
-    @{ Name = 'EvidenceDir'; Path = $EvidenceDir },
-    @{ Name = 'PIPLAY_DATA_ROOT'; Path = $DataRoot }
-)) {
-    $resolvedExternal = [System.IO.Path]::GetFullPath($external.Path)
-    if (Test-PathsOverlap -First $resolvedExternal -Second $packageRoot) {
-        throw "$($external.Name) must not overlap the immutable package root."
-    }
-}
+$EvidenceDir = Resolve-ExternalDirectory -Path $EvidenceDir -Name 'EvidenceDir' -PackageRoot $packageRoot
+$DataRoot = Resolve-ExternalDirectory -Path $DataRoot -Name 'PIPLAY_DATA_ROOT' -PackageRoot $packageRoot
 
 $smokeScript = Join-Path $packageRoot 'scripts\Test-UiSmoke.ps1'
 & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $smokeScript `
