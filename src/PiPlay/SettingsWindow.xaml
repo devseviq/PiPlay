@@ -157,6 +157,34 @@
           </ToggleButton>
         </UniformGrid>
 
+        <!-- Corner style (docs/Theme_Preset_Differences.md): an override of the theme's whole corner PROFILE
+             (control radii + native window corner), never individual per-control radii. "Theme"
+             keeps preset-owned corners. Chip names use the CornerStyle prefix — the catalog-drift
+             test predicates key on Theme*Preset / CornerStyle* names. -->
+        <TextBlock Text="Corners" FontSize="12" Foreground="{DynamicResource TextSecondary}"
+                   Margin="0,0,0,6" />
+        <UniformGrid Columns="4" Margin="0,0,0,12">
+          <ToggleButton x:Name="CornerStyleThemeChip" Style="{StaticResource PresetToggle}"
+                        MinWidth="0" Content="Follow theme" Tag="theme" Click="CornerStyle_Click"
+                        ToolTip="Corners follow the selected theme"
+                        AutomationProperties.Name="Corners follow theme" />
+          <ToggleButton x:Name="CornerStyleSquareChip" Style="{StaticResource PresetToggle}"
+                        MinWidth="0" Content="Square" Tag="square" Click="CornerStyle_Click"
+                        ToolTip="Square corners everywhere"
+                        AutomationProperties.Name="Square corners" />
+          <ToggleButton x:Name="CornerStyleSmallChip" Style="{StaticResource PresetToggle}"
+                        MinWidth="0" Content="Small round" Tag="small" Click="CornerStyle_Click"
+                        ToolTip="Small, sharp corner rounding"
+                        AutomationProperties.Name="Small corners" />
+          <ToggleButton x:Name="CornerStyleRoundChip" Style="{StaticResource PresetToggle}"
+                        MinWidth="0" Margin="0" Content="Round" Tag="round" Click="CornerStyle_Click"
+                        ToolTip="Large, round overlay-style corners"
+                        AutomationProperties.Name="Round corners" />
+        </UniformGrid>
+
+        <TextBlock Text="Soft Glass follows rounded corners by default. Choose Square for straight edges; translucency stays the same."
+                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,14" />
+
         <TextBlock Text="Accent color" FontSize="12" Foreground="{DynamicResource TextSecondary}"
                    Margin="0,0,0,6" />
         <TextBlock x:Name="AccentTargetText" FontSize="12" Foreground="{DynamicResource TextSecondary}"
@@ -186,34 +214,6 @@
           <TextBlock x:Name="AccentIntensityValueText" Grid.Column="2" FontSize="12" TextAlignment="Right"
                      Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
         </Grid>
-
-        <!-- Corner style (docs/Theme_Preset_Differences.md): an override of the theme's whole corner PROFILE
-             (control radii + native window corner), never individual per-control radii. "Theme"
-             keeps preset-owned corners. Chip names use the CornerStyle prefix — the catalog-drift
-             test predicates key on Theme*Preset / CornerStyle* names. -->
-        <TextBlock Text="Corners" FontSize="12" Foreground="{DynamicResource TextSecondary}"
-                   Margin="0,0,0,6" />
-        <UniformGrid Columns="4" Margin="0,0,0,12">
-          <ToggleButton x:Name="CornerStyleThemeChip" Style="{StaticResource PresetToggle}"
-                        MinWidth="0" Content="Follow theme" Tag="theme" Click="CornerStyle_Click"
-                        ToolTip="Corners follow the selected theme"
-                        AutomationProperties.Name="Corners follow theme" />
-          <ToggleButton x:Name="CornerStyleSquareChip" Style="{StaticResource PresetToggle}"
-                        MinWidth="0" Content="Square" Tag="square" Click="CornerStyle_Click"
-                        ToolTip="Square corners everywhere"
-                        AutomationProperties.Name="Square corners" />
-          <ToggleButton x:Name="CornerStyleSmallChip" Style="{StaticResource PresetToggle}"
-                        MinWidth="0" Content="Small round" Tag="small" Click="CornerStyle_Click"
-                        ToolTip="Small, sharp corner rounding"
-                        AutomationProperties.Name="Small corners" />
-          <ToggleButton x:Name="CornerStyleRoundChip" Style="{StaticResource PresetToggle}"
-                        MinWidth="0" Margin="0" Content="Round" Tag="round" Click="CornerStyle_Click"
-                        ToolTip="Large, round overlay-style corners"
-                        AutomationProperties.Name="Round corners" />
-        </UniformGrid>
-
-        <TextBlock Text="Soft Glass follows rounded corners by default. Choose Square for straight edges; translucency stays the same."
-                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,14" />
 
         <!-- Focused is a Popout PRESENTATION, not the dormant Compact playback mode. It keeps the
              Normal watch page, expands the player without cropping, and adds optional overlay controls.
