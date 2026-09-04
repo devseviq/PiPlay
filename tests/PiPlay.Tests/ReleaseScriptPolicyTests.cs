@@ -375,8 +375,11 @@ public class ReleaseScriptPolicyTests
     {
         var ciWorkflow = Script(".github/workflows/ci.yml");
         var testReleasePath = Path.Combine(RepoRoot, ".github", "workflows", "test-release.yml");
+        var publisherPath = Path.Combine(RepoRoot, ".github", "scripts", "Publish-TestPrerelease.ps1");
         Assert.True(File.Exists(testReleasePath), "The manual GitHub prerelease workflow is missing.");
+        Assert.True(File.Exists(publisherPath), "The test-prerelease publisher script is missing.");
         var workflow = File.ReadAllText(testReleasePath).Replace("\r\n", "\n");
+        var publisher = File.ReadAllText(publisherPath);
 
         Assert.DoesNotContain("actions/upload-artifact", ciWorkflow);
         Assert.DoesNotContain("actions/upload-artifact", workflow);
@@ -395,10 +398,15 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("CreateFromDirectory", workflow);
         Assert.Contains("Expand-Archive -LiteralPath $archive", workflow);
         Assert.Contains("-Kind Test -Root $extractRoot -ExpectedCommit $env:GITHUB_SHA -ValidateOnly", workflow);
-        Assert.Contains("gh release create $tag", workflow);
-        Assert.Contains("--prerelease", workflow);
-        Assert.Contains("--target $env:GITHUB_SHA", workflow);
-        Assert.Contains("NOT RELEASE EVIDENCE", workflow);
+        Assert.Contains("Publish-TestPrerelease.ps1", workflow);
+        Assert.Contains("git/refs", publisher);
+        Assert.Contains("refs/tags/test-*", publisher);
+        Assert.Contains("--verify-tag", publisher);
+        Assert.Contains("--draft", publisher);
+        Assert.Contains("--draft=false", publisher);
+        Assert.DoesNotContain("--target", publisher);
+        Assert.Contains("NOT RELEASE EVIDENCE", publisher);
+        Assert.Contains("secrets.PIPLAY_RELEASE_POLICY_TOKEN", workflow);
 
         var usesLines = workflow.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Trim())

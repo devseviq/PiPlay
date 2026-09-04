@@ -39,7 +39,7 @@ Set-Location -LiteralPath ".\PiPlay-$tag"
 pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ExpectedCommit $commit
 ```
 
-The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test prereleases are explicitly marked as non-release evidence and remain on the Releases page until deliberately removed; the workflow does not delete them automatically. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
+The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test prereleases are explicitly marked as non-release evidence and remain on the Releases page until deliberately removed; the workflow does not delete them automatically. Publishing requires the same `PIPLAY_RELEASE_POLICY_TOKEN` secret plus an active, exclusion-free, no-bypass tag ruleset for `refs/tags/test-*`, preventing the verified test tag from moving during publication. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
 
 ## Stable acceptance
 

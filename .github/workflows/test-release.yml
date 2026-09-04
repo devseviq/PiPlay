@@ -111,36 +111,13 @@ jobs:
       - name: Create GitHub test prerelease
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
+          PIPLAY_RELEASE_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $tag = '${{ steps.package.outputs.tag }}'
-          $existingRefs = @(& git ls-remote --tags origin "refs/tags/$tag")
-          if ($LASTEXITCODE -ne 0) { throw "Could not check remote test tag '$tag'." }
-          if ($existingRefs.Count -ne 0) { throw "Remote test tag already exists: '$tag'." }
-          & gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "GitHub prerelease already exists for '$tag'." }
-
-          $notes = @"
-          Test package for commit $env:GITHUB_SHA.
-
-          NOT RELEASE EVIDENCE. Interactive verification remains pending on SND-DESK.
-          "@
-          & gh release create $tag `
-            '${{ steps.package.outputs.archive }}' `
-            '${{ steps.package.outputs.checksum }}' `
-            --repo $env:GITHUB_REPOSITORY `
-            --target $env:GITHUB_SHA `
-            --prerelease `
-            --title '${{ steps.package.outputs.title }}' `
-            --notes $notes
-          if ($LASTEXITCODE -ne 0) { throw "GitHub test prerelease creation failed (exit $LASTEXITCODE)." }
-
-          $remoteRefs = @(& git ls-remote --tags origin "refs/tags/$tag")
-          if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -ne 1) {
-            throw "Could not verify created test tag '$tag'."
-          }
-          $remoteCommit = ($remoteRefs[0] -split '\s+')[0]
-          if ($remoteCommit -cne $env:GITHUB_SHA) {
-            throw "Created test tag '$tag' does not identify $env:GITHUB_SHA."
-          }
+          & .\.github\scripts\Publish-TestPrerelease.ps1 `
+            -Tag '${{ steps.package.outputs.tag }}' `
+            -Commit $env:GITHUB_SHA `
+            -Archive '${{ steps.package.outputs.archive }}' `
+            -Checksum '${{ steps.package.outputs.checksum }}' `
+            -Repository $env:GITHUB_REPOSITORY `
+            -Title '${{ steps.package.outputs.title }}'

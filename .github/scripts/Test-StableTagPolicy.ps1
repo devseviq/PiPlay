@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Repository = $env:GITHUB_REPOSITORY
+    [string]$Repository = $env:GITHUB_REPOSITORY,
+    [string]$RequiredPattern = 'refs/tags/stable-v*'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,13 +14,16 @@ if ([string]::IsNullOrWhiteSpace($Repository) -or
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
     throw 'GH_TOKEN must provide Administration read access so ruleset bypass actors are visible.'
 }
+if ($RequiredPattern -notmatch '^refs/tags/[^\s]+$') {
+    throw "RequiredPattern must identify tags; received '$RequiredPattern'."
+}
 
 $summariesJson = & gh api --paginate "repos/$Repository/rulesets?includes_parents=true"
 if ($LASTEXITCODE -ne 0) {
     throw "Could not list GitHub rulesets for '$Repository'."
 }
 $summaries = @($summariesJson | ConvertFrom-Json)
-$requiredPattern = 'refs/tags/stable-v*'
+$requiredPattern = $RequiredPattern
 
 foreach ($summary in $summaries) {
     $detailJson = & gh api "repos/$Repository/rulesets/$($summary.id)"
