@@ -22,6 +22,8 @@ SND-HOST owns the working repository, feature work, builds, and publication. Sta
 
 SND-DESK has no repository checkout and accepts downloads only from GitHub Releases. It uses either a test prerelease or a Stable release; every package contains its own hash-covered verifier and UI-smoke entrypoint.
 
+For the resumable activation sequence, machine boundaries, provider gates, and stop conditions, see [`docs/REPO_LESS_DESK_RELEASE_HANDOFF.md`](docs/REPO_LESS_DESK_RELEASE_HANDOFF.md).
+
 ## Downloaded test packages
 
 Manually dispatch the `Publish test download` workflow for the commit to test. It creates a uniquely tagged GitHub prerelease containing a ZIP and SHA256 file. Download both from the Releases page on SND-DESK, then run:
