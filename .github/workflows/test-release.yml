@@ -56,7 +56,8 @@ jobs:
           }
 
           $publishRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-test-release-package'
-          $publishLabel = "test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT"
+          $publishLabel = "test-$env:GITHUB_SHA"
+          $tag = "test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT"
           $nonReleaseReason = 'GitHub test prerelease; interactive verification pending on SND-DESK'
           & .\scripts\Build-PiPlay.ps1 `
             -Stage Publish `
@@ -85,7 +86,7 @@ jobs:
 
           $assetRoot = Join-Path $env:RUNNER_TEMP 'PiPlay-test-release-assets'
           New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
-          $archive = Join-Path $assetRoot "PiPlay-$publishLabel.zip"
+          $archive = Join-Path $assetRoot "PiPlay-$tag.zip"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           [System.IO.Compression.ZipFile]::CreateFromDirectory(
             $payloadRoot,
@@ -104,7 +105,7 @@ jobs:
             Set-Content -LiteralPath $checksum -Encoding ascii -NoNewline
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
-          "tag=$publishLabel" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
           "title=PiPlay test $($env:GITHUB_SHA.Substring(0, 12))" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub test prerelease

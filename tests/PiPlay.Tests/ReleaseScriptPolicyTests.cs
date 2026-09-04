@@ -384,6 +384,7 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("contents: write", workflow);
         Assert.Contains("persist-credentials: false", workflow);
         Assert.Contains("$headCommit -cne $env:GITHUB_SHA", workflow);
+        Assert.Contains("$publishLabel = \"test-$env:GITHUB_SHA\"", workflow);
         Assert.Contains("test-$env:GITHUB_SHA-r$env:GITHUB_RUN_ID-a$env:GITHUB_RUN_ATTEMPT", workflow);
         Assert.Contains("-Stage Publish", workflow);
         Assert.Contains("-Channel Stable", workflow);
