@@ -18,9 +18,19 @@ pwsh -NoProfile -File .\scripts\Test-LocalCI.ps1
 
 ## Development and promotion
 
-SND-HOST owns routine feature work: start from current `main`, use a machine-namespaced `snd-host/...` branch, run the local gate, and open a pull request. GitHub-hosted `Build and test (Windows)` is the required merge check.
+SND-HOST owns the working repository, feature work, builds, and publication. Start from current `main`, use a machine-namespaced `snd-host/...` branch, run the local gate, and open a pull request. GitHub-hosted `Build and test (Windows)` is the required merge check.
 
-SND-DESK owns clean validation and Stable acceptance. Fast-forward a clean test worktree, keep automated test/UI data disposable through the repository scripts, and never replace the Stable runtime with source or feature-branch output. Promote only a merged, committed release through the Stable scripts below.
+SND-DESK has no repository checkout. It downloads either a temporary `PiPlay-test-<commit>` Actions artifact or a permanent Stable ZIP from GitHub Releases. Every package contains its own hash-covered verifier and UI-smoke entrypoint.
+
+## Downloaded test packages
+
+Manually dispatch the `CI` workflow for the commit to test. Download and extract its `PiPlay-test-<commit>` artifact on SND-DESK, open PowerShell 7 in the extracted directory, and run:
+
+```powershell
+pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test
+```
+
+The command verifies the complete package before launching the automated UI smoke. Test packages are explicitly marked as non-release evidence and expire with GitHub Actions artifact retention.
 
 ## Stable acceptance
 
@@ -34,4 +44,10 @@ if ([string]::IsNullOrWhiteSpace($stableRoot)) { throw 'Set PIPLAY_STABLE_ROOT f
 pwsh -NoProfile -File .\scripts\Test-UiSmoke.ps1 -ExePath (Join-Path $stableRoot 'PiPlay.exe')
 ```
 
-Do not use source or `bin` output as release evidence. On that verified copy: pop out a playing video and listen through launch and return/close (Q-1); repeat once with a playlist or mix when available; record unavailable ads/account/profile states as not run.
+After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. On SND-DESK, extract the ZIP and run:
+
+```powershell
+pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Release
+```
+
+Do not use source or `bin` output as release evidence. On the verified downloaded copy: pop out a playing video and listen through launch and return/close (Q-1); repeat once with a playlist or mix when available; record unavailable ads/account/profile states as not run.

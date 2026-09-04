@@ -335,7 +335,75 @@ public class ReleaseScriptPolicyTests
             .Select(line => line.Trim())
             .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(3, usesLines.Length);
+        Assert.Equal(4, usesLines.Length);
+        Assert.All(usesLines, line => Assert.Matches(
+            new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
+            line));
+    }
+
+    [Fact]
+    public void Publish_payload_includes_standalone_download_validation()
+    {
+        var build = Script("scripts/Build-PiPlay.ps1");
+        var verifier = Script("scripts/Test-DownloadedPackage.ps1");
+
+        Assert.Contains("scripts\\Test-DownloadedPackage.ps1", build);
+        Assert.Contains("scripts\\Test-UiSmoke.ps1", build);
+        Assert.Contains("[ValidateSet('Test', 'Release')]", verifier);
+        Assert.Contains("[switch]$ValidateOnly", verifier);
+        Assert.Contains("Resolve-ManifestArtifactPath", verifier);
+        Assert.Contains("Get-Sha256Hex", verifier);
+        Assert.Contains("sourceDirty must be false", verifier);
+        Assert.Contains("releaseEvidence must be false", verifier);
+        Assert.Contains("releaseEvidence must be true", verifier);
+        Assert.Contains("PACKAGE VERIFIED", verifier);
+        Assert.Contains("PIPLAY_DATA_ROOT", verifier);
+        Assert.Contains("Test-UiSmoke.ps1", verifier);
+    }
+
+    [Fact]
+    public void Manual_ci_dispatch_builds_validates_and_uploads_only_a_test_package()
+    {
+        var workflow = Script(".github/workflows/ci.yml").Replace("\r\n", "\n");
+
+        Assert.Contains("if: github.event_name == 'workflow_dispatch'", workflow);
+        Assert.Contains("-Stage Publish", workflow);
+        Assert.Contains("-Channel Stable", workflow);
+        Assert.Contains("-NoVersionBump", workflow);
+        Assert.Contains("-NoBuildNumberBump", workflow);
+        Assert.Contains("-NonReleaseReason $nonReleaseReason", workflow);
+        Assert.Contains("Test-DownloadedPackage.ps1", workflow);
+        Assert.Contains("-Kind Test -ValidateOnly", workflow);
+        Assert.Contains("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow);
+        Assert.Contains("PiPlay-test-${{ github.sha }}", workflow);
+        Assert.DoesNotContain("gh release create", workflow);
+    }
+
+    [Fact]
+    public void Stable_tag_workflow_creates_a_permanent_verified_release_package()
+    {
+        var workflow = Script(".github/workflows/release.yml").Replace("\r\n", "\n");
+
+        Assert.Contains("tags:\n      - 'stable-v*'", workflow);
+        Assert.Contains("contents: write", workflow);
+        Assert.Contains("fetch-depth: 0", workflow);
+        Assert.Contains("persist-credentials: false", workflow);
+        Assert.Contains("stable-v(?<version>", workflow);
+        Assert.Contains("-Stage Release", workflow);
+        Assert.Contains("-Channel Stable", workflow);
+        Assert.Contains("-NoVersionBump", workflow);
+        Assert.Contains("-NoBuildNumberBump", workflow);
+        Assert.Contains("Test-DownloadedPackage.ps1", workflow);
+        Assert.Contains("-Kind Release -ValidateOnly", workflow);
+        Assert.Contains("releaseEvidence", workflow);
+        Assert.Contains("sourceCommit", workflow);
+        Assert.Contains("gh release create", workflow);
+        Assert.Contains("--verify-tag", workflow);
+
+        var usesLines = workflow.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("uses: ", StringComparison.Ordinal))
+            .ToArray();
         Assert.All(usesLines, line => Assert.Matches(
             new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
             line));

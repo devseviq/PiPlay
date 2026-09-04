@@ -196,7 +196,7 @@ Every icon-only control has an accessible name and keyboard focus. Pin/transfer 
 
 ## 21. Packaging and release
 
-Exact-source Stable publishing requires committed `VERSION`, `BUILD_NUMBER`, a clean tree, and a Stable deployment root supplied by `PIPLAY_STABLE_ROOT` or `-DeployRoot`. The verifier checks manifest hashes and source identity. Signing is optional through `-SignScript` and runs before hashes. (`Build-PiPlay.ps1`, `Publish-Stable.ps1`, `Verify-StableDeploy.ps1`.)
+SND-HOST owns source, builds, and publication; SND-DESK requires no repository. Exact-source Stable publishing requires committed `VERSION`, `BUILD_NUMBER`, a clean tree, and a Stable deployment root supplied by `PIPLAY_STABLE_ROOT` or `-DeployRoot`. Pushing the resulting `stable-vX.Y.Z-bN` tag produces a permanent GitHub Release ZIP from that exact tag. Manual CI dispatch produces an expiring, explicitly non-release `PiPlay-test-<commit>` artifact. Both downloaded payloads contain `scripts/Test-DownloadedPackage.ps1`, which verifies their complete manifest inventory, hashes, binary identity, clean-source metadata, and test-versus-release evidence before UI smoke. Signing is optional through `-SignScript` and runs before hashes. (`Build-PiPlay.ps1`, `Publish-Stable.ps1`, `Verify-StableDeploy.ps1`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`.)
 
 ## 22. Quality gates
 
@@ -206,7 +206,7 @@ Automated gate: `scripts/Test-LocalCI.ps1`.
 
 ### 22.2 Deployed UI smoke
 
-`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the deployed executable, uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Needs an interactive desktop and WebView2.
+`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the selected executable, uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Downloaded packages enter it only through the standalone package verifier, with data and evidence paths outside the immutable package root. Needs an interactive desktop and WebView2.
 
 ### 22.3 End-user acceptance
 
