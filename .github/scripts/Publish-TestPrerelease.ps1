@@ -20,7 +20,7 @@ foreach ($asset in @($Archive, $Checksum)) {
     if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Prerelease asset not found: '$asset'." }
 }
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-    throw 'GH_TOKEN must contain the Administration-read policy token.'
+    throw 'GH_TOKEN must contain a policy credential that can inspect ruleset bypass actors.'
 }
 if ([string]::IsNullOrWhiteSpace($env:PIPLAY_RELEASE_TOKEN)) {
     throw 'PIPLAY_RELEASE_TOKEN must contain the publication token.'

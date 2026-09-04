@@ -12,7 +12,7 @@ if ([string]::IsNullOrWhiteSpace($Repository) -or
     throw "Repository must be an owner/name value; received '$Repository'."
 }
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-    throw 'GH_TOKEN must provide Administration read access so ruleset bypass actors are visible.'
+    throw 'GH_TOKEN must expose ruleset bypass actors; use a policy credential with ruleset write access scoped to this repository.'
 }
 if ($RequiredPattern -notmatch '^refs/tags/[^\s]+$') {
     throw "RequiredPattern must identify tags; received '$RequiredPattern'."
@@ -60,4 +60,4 @@ foreach ($summary in $summaries) {
     }
 }
 
-throw "GitHub Releases are blocked: '$Repository' needs an active, exclusion-free tag ruleset for '$requiredPattern' with restrict-updates, restrict-deletions, and no bypass actors. GH_TOKEN must have Administration read access so the empty bypass list can be verified."
+throw "GitHub Releases are blocked: '$Repository' needs an active, exclusion-free tag ruleset for '$requiredPattern' with restrict-updates, restrict-deletions, and no bypass actors. GH_TOKEN must expose the bypass list; use a policy credential with ruleset write access scoped to this repository."

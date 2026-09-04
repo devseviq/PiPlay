@@ -41,7 +41,9 @@ Set-Location -LiteralPath ".\PiPlay-$tag"
 pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ExpectedCommit $commit
 ```
 
-The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test prereleases are explicitly marked as non-release evidence and remain on the Releases page until deliberately removed; the workflow does not delete them automatically. Publishing requires the same `PIPLAY_RELEASE_POLICY_TOKEN` secret plus an active, exclusion-free, no-bypass tag ruleset for `refs/tags/test-*`, preventing the verified test tag from moving during publication. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
+The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test prereleases are explicitly marked as non-release evidence and remain on the Releases page until deliberately removed; the workflow does not delete them automatically. Automated publishing requires the same `PIPLAY_RELEASE_POLICY_TOKEN` secret plus an active, exclusion-free, no-bypass tag ruleset for `refs/tags/test-*`, preventing the verified test tag from moving during publication. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
+
+While the Actions policy secret is being provisioned, SND-HOST can use the [local test-publication procedure](docs/REPO_LESS_DESK_RELEASE_HANDOFF.md#local-test-publication-while-the-actions-policy-secret-is-pending). It preserves package and tag verification and records the local build separately from the successful source CI run.
 
 ## Stable acceptance
 
@@ -55,7 +57,7 @@ if ([string]::IsNullOrWhiteSpace($stableRoot)) { throw 'Set PIPLAY_STABLE_ROOT f
 pwsh -NoProfile -File .\scripts\Test-UiSmoke.ps1 -ExePath (Join-Path $stableRoot 'PiPlay.exe')
 ```
 
-After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. Publication fails closed unless GitHub has an active, exclusion-free tag ruleset for `refs/tags/stable-v*` with restrict-updates, restrict-deletions, and no bypass actors. Store a fine-grained token with Administration read access as the `PIPLAY_RELEASE_POLICY_TOKEN` Actions secret so the workflow can verify that provider rule; the normal workflow token still performs publication. Configure both gates before creating a Stable tag. On SND-DESK, extract the ZIP and run:
+After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. Publication fails closed unless GitHub has an active, exclusion-free tag ruleset for `refs/tags/stable-v*` with restrict-updates, restrict-deletions, and no bypass actors. Store a fine-grained token scoped only to `devseviq/PiPlay`, with Administration write access and no Contents permission, as the `PIPLAY_RELEASE_POLICY_TOKEN` Actions secret. GitHub requires write access to the ruleset to expose its bypass actors; the workflow uses this token only to inspect policy, while `github.token` performs publication. See [GitHub's ruleset API permissions](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset). Configure both gates before creating a Stable tag. On SND-DESK, extract the ZIP and run:
 
 ```powershell
 $tag = '<stable-vX.Y.Z-bN from the GitHub Release page>'

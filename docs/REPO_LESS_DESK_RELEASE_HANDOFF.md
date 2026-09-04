@@ -63,7 +63,7 @@ The nine commits from `0e96bdf` through `0891ab1` provide:
 - immutable-tag policy checks for `refs/tags/test-*` and
   `refs/tags/stable-v*`, including active enforcement, no exclusions, no bypass
   actors, and restrictions on updates and deletion;
-- separate Administration-read policy credentials and publication credentials;
+- separate policy-verification and publication credentials;
 - atomic test-tag creation before a draft prerelease is uploaded, followed by
   tag checks before and after publication;
 - behavioral and policy tests for the publication boundary.
@@ -188,8 +188,10 @@ Before dispatching either publication workflow, verify live provider state:
 
 1. Actions can grant the workflow token `contents: write`.
 2. The Actions secret `PIPLAY_RELEASE_POLICY_TOKEN` exists. It is a fine-grained
-   token with Administration read access used only to inspect repository
-   rulesets and their bypass actors.
+   token scoped only to `devseviq/PiPlay`, with Administration write access and
+   no Contents permission. GitHub requires write access to the ruleset to expose
+   its bypass actors. The workflow uses this token only to inspect policy;
+   publication continues to use `github.token`.
 3. One or more active tag rulesets cover the exact include patterns
    `refs/tags/test-*` and `refs/tags/stable-v*`.
 4. Each qualifying ruleset has no exclusions, no bypass actors, and restricts
@@ -207,7 +209,8 @@ gh api --paginate 'repos/devseviq/PiPlay/rulesets?includes_parents=true'
 
 Secret listing confirms only the name, not that its value or permissions are
 correct. The workflows fail closed by running
-`.github/scripts/Test-StableTagPolicy.ps1` against the required pattern.
+`.github/scripts/Test-StableTagPolicy.ps1` against the required pattern. The
+gate verifies the returned empty `bypass_actors` list, not a token's scope label.
 
 Changing workflow permissions, secrets, or rulesets is an external access-control
 write and requires explicit operator authorization. Configure provider state
@@ -262,6 +265,44 @@ and record unavailable ad/account/profile states as not run.
 
 Acceptance is tied to the exact commit and test tag. A passed test prerelease
 does not authorize Stable promotion by itself.
+
+### Local test publication while the Actions policy secret is pending
+
+SND-HOST may publish a test package with the existing scripts and its current
+GitHub CLI identity while a scoped Actions policy credential is being provisioned:
+
+1. Fetch `origin/main` and use a clean checkout at that exact merged commit.
+   Require a successful GitHub `Build and test (Windows)` run on `main` whose
+   `headSha` matches it, then run `scripts/Test-LocalCI.ps1` locally.
+2. Build with `scripts/Build-PiPlay.ps1 -Stage Publish -Configuration Release
+   -Channel Stable -NoVersionBump -NoBuildNumberBump`, an external `-PublishRoot`,
+   `-PublishLabel test-<commit>`, `-NoLatest -NoVersionTable -StopProcessName ''`,
+   and `-NonReleaseReason 'GitHub test prerelease; interactive verification pending on SND-DESK'`.
+3. Run the packaged `scripts/Test-DownloadedPackage.ps1 -Kind Test
+   -ExpectedCommit <commit> -ValidateOnly`. Archive the complete payload with
+   `System.IO.Compression.ZipFile.CreateFromDirectory`, extract the ZIP into a
+   fresh external directory, and reverify it with the trusted checkout's
+   `scripts/Test-DownloadedPackage.ps1 -Kind Test -Root <extracted-root>
+   -ExpectedCommit <commit> -ValidateOnly`. Write the ZIP's SHA256 companion file.
+4. Use `test-<commit>-r<successful-source-CI-run-id>-a<publication-attempt>` as the
+   unique tag and ZIP identity. Keep the authenticated CLI credential only in
+   the publication process's `GH_TOKEN` and `PIPLAY_RELEASE_TOKEN` environment
+   variables; restore their prior values afterward. Do not print the credential
+   or store it as an Actions secret.
+5. Invoke `.github/scripts/Publish-TestPrerelease.ps1` with that tag, commit,
+   archive, checksum, repository, and title. Its active tag-policy, visible
+   empty-bypass-list, atomic tag-creation, and draft/publication verification
+   gates remain mandatory. Give the release a title that identifies the local
+   build, then update its notes before handing it to the desk agent.
+6. The release notes and build receipt must state that the ZIP was built on
+   SND-HOST, link the successful source CI run, and explain that the tag's run ID
+   identifies source verification rather than ZIP production. Retain
+   `NOT RELEASE EVIDENCE` and pending SND-DESK acceptance. Verify the visible
+   prerelease, exact remote tag target, ZIP, checksum, and downloaded ZIP hash.
+
+This route delivers the same test-package contract. It does not verify the
+Actions policy secret or establish that the automated publication workflow is
+ready, and it does not satisfy the separate Stable readiness gate.
 
 ## Separate next-Stable readiness gate
 
