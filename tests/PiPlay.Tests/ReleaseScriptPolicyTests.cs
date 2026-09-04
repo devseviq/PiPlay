@@ -447,6 +447,9 @@ public class ReleaseScriptPolicyTests
         const string hiddenBypassState = """
             {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
             """;
+        const string nullBypassState = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":null,"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
 
         var validResult = await RunStableTagPolicyAsync(valid);
         Assert.True(validResult.ExitCode == 0,
@@ -454,6 +457,7 @@ public class ReleaseScriptPolicyTests
         Assert.NotEqual(0, (await RunStableTagPolicyAsync(broadExclusion)).ExitCode);
         Assert.NotEqual(0, (await RunStableTagPolicyAsync(alwaysBypass)).ExitCode);
         Assert.NotEqual(0, (await RunStableTagPolicyAsync(hiddenBypassState)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(nullBypassState)).ExitCode);
     }
 
     private static async Task<(int ExitCode, string Output, string Error)> RunStableTagPolicyAsync(string detailJson)

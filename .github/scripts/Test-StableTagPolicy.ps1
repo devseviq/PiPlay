@@ -39,10 +39,12 @@ foreach ($summary in $summaries) {
     }
 
     $bypassProperty = $detail.PSObject.Properties['bypass_actors']
-    if ($null -eq $bypassProperty) {
+    if ($null -eq $bypassProperty -or
+        $null -eq $bypassProperty.Value -or
+        $bypassProperty.Value -isnot [System.Array]) {
         continue
     }
-    $bypassActors = @($bypassProperty.Value | Where-Object { $null -ne $_ })
+    $bypassActors = @($bypassProperty.Value)
     if ($bypassActors.Count -ne 0) {
         continue
     }
