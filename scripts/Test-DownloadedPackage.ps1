@@ -30,6 +30,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:TestPackageReason =
     'GitHub Actions test package; interactive verification pending on SND-DESK'
+$script:ReleasePackageReason =
+    'source commit, version stamps, and artifact hashes were captured from a clean tree'
 
 function Get-ObjectPropertyValue {
     param(
@@ -205,8 +207,8 @@ else {
     if ($buildInfo.releaseEvidence -isnot [bool] -or -not $buildInfo.releaseEvidence) {
         throw 'Release package releaseEvidence must be true.'
     }
-    if (-not [string]::IsNullOrWhiteSpace([string]$buildInfo.releaseEvidenceReason)) {
-        throw 'Release package releaseEvidenceReason must be empty.'
+    if ([string]$buildInfo.releaseEvidenceReason -cne $script:ReleasePackageReason) {
+        throw "Release package releaseEvidenceReason must equal '$script:ReleasePackageReason'."
     }
     $expectedLabel = "stable-v$($buildInfo.version)-b$($buildInfo.buildNumber)"
     if ([string]$buildInfo.publishLabel -cne $expectedLabel) {

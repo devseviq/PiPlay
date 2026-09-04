@@ -356,6 +356,7 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("sourceDirty must be false", verifier);
         Assert.Contains("releaseEvidence must be false", verifier);
         Assert.Contains("releaseEvidence must be true", verifier);
+        Assert.Contains("source commit, version stamps, and artifact hashes were captured from a clean tree", verifier);
         Assert.Contains("PACKAGE VERIFIED", verifier);
         Assert.Contains("PIPLAY_DATA_ROOT", verifier);
         Assert.Contains("Test-UiSmoke.ps1", verifier);
