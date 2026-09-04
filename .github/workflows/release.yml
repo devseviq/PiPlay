@@ -32,7 +32,7 @@ jobs:
       - name: Require immutable Stable tags
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
         run: .\.github\scripts\Test-StableTagPolicy.ps1
 
       - name: Set up .NET from global.json
@@ -124,11 +124,13 @@ jobs:
       - name: Create permanent GitHub Release
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PIPLAY_RELEASE_POLICY_TOKEN }}
+          PIPLAY_RELEASE_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           & .\.github\scripts\Test-StableTagPolicy.ps1
           if ($LASTEXITCODE -ne 0) { throw "Stable tag policy verification failed (exit $LASTEXITCODE)." }
+          $env:GH_TOKEN = $env:PIPLAY_RELEASE_TOKEN
           $tag = $env:GITHUB_REF_NAME
           $remoteRefs = @(& git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
           if ($LASTEXITCODE -ne 0 -or $remoteRefs.Count -eq 0) {

@@ -45,7 +45,7 @@ if ([string]::IsNullOrWhiteSpace($stableRoot)) { throw 'Set PIPLAY_STABLE_ROOT f
 pwsh -NoProfile -File .\scripts\Test-UiSmoke.ps1 -ExePath (Join-Path $stableRoot 'PiPlay.exe')
 ```
 
-After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. Publication fails closed unless GitHub has an active tag ruleset for `refs/tags/stable-v*` with both restrict-updates and restrict-deletions enabled; configure that provider rule before creating a Stable tag. On SND-DESK, extract the ZIP and run:
+After the verified tag is pushed, `.github/workflows/release.yml` rebuilds that exact tag and attaches a permanent ZIP plus SHA256 file to its GitHub Release. Publication fails closed unless GitHub has an active, exclusion-free tag ruleset for `refs/tags/stable-v*` with restrict-updates, restrict-deletions, and no bypass actors. Store a fine-grained token with Administration read access as the `PIPLAY_RELEASE_POLICY_TOKEN` Actions secret so the workflow can verify that provider rule; the normal workflow token still performs publication. Configure both gates before creating a Stable tag. On SND-DESK, extract the ZIP and run:
 
 ```powershell
 $tag = '<stable-vX.Y.Z-bN from the GitHub Release page>'

@@ -10,8 +10,11 @@ if ([string]::IsNullOrWhiteSpace($Repository) -or
     $Repository -notmatch '^[^/\s]+/[^/\s]+$') {
     throw "Repository must be an owner/name value; received '$Repository'."
 }
+if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+    throw 'GH_TOKEN must provide Administration read access so ruleset bypass actors are visible.'
+}
 
-$summariesJson = & gh api "repos/$Repository/rulesets?includes_parents=true&per_page=100"
+$summariesJson = & gh api --paginate "repos/$Repository/rulesets?includes_parents=true"
 if ($LASTEXITCODE -ne 0) {
     throw "Could not list GitHub rulesets for '$Repository'."
 }
@@ -31,7 +34,16 @@ foreach ($summary in $summaries) {
     $includePatterns = @($detail.conditions.ref_name.include | ForEach-Object { [string]$_ })
     $excludePatterns = @($detail.conditions.ref_name.exclude | ForEach-Object { [string]$_ })
     if ($includePatterns -cnotcontains $requiredPattern -or
-        $excludePatterns -ccontains $requiredPattern) {
+        $excludePatterns.Count -ne 0) {
+        continue
+    }
+
+    $bypassProperty = $detail.PSObject.Properties['bypass_actors']
+    if ($null -eq $bypassProperty) {
+        continue
+    }
+    $bypassActors = @($bypassProperty.Value | Where-Object { $null -ne $_ })
+    if ($bypassActors.Count -ne 0) {
         continue
     }
 
@@ -42,4 +54,4 @@ foreach ($summary in $summaries) {
     }
 }
 
-throw "GitHub Releases are blocked: '$Repository' needs an active tag ruleset for '$requiredPattern' with restrict-updates and restrict-deletions rules."
+throw "GitHub Releases are blocked: '$Repository' needs an active, exclusion-free tag ruleset for '$requiredPattern' with restrict-updates, restrict-deletions, and no bypass actors. GH_TOKEN must have Administration read access so the empty bypass list can be verified."

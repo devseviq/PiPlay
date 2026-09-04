@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
 
@@ -401,8 +402,11 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("$detail.target -cne 'tag'", tagPolicy);
         Assert.Contains("$detail.enforcement -cne 'active'", tagPolicy);
         Assert.Contains("refs/tags/stable-v*", tagPolicy);
+        Assert.Contains("$excludePatterns.Count -ne 0", tagPolicy);
+        Assert.Contains("bypass_actors", tagPolicy);
         Assert.Contains("'deletion'", tagPolicy);
         Assert.Contains("'update'", tagPolicy);
+        Assert.Contains("secrets.PIPLAY_RELEASE_POLICY_TOKEN", workflow);
         Assert.Contains("stable-v(?<version>", workflow);
         Assert.Contains("-Stage Release", workflow);
         Assert.Contains("-Channel Stable", workflow);
@@ -426,6 +430,88 @@ public class ReleaseScriptPolicyTests
         Assert.All(usesLines, line => Assert.Matches(
             new Regex(@"^uses: [^@\s]+@[0-9a-f]{40}(?:\s+#\s+.+)?$", RegexOptions.CultureInvariant),
             line));
+    }
+
+    [Fact]
+    public async Task Stable_tag_policy_rejects_exclusions_bypasses_and_hidden_bypass_state()
+    {
+        const string valid = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string broadExclusion = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":["refs/tags/*"]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string alwaysBypass = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","bypass_actors":[{"actor_type":"RepositoryRole","actor_id":5,"bypass_mode":"always"}],"conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+        const string hiddenBypassState = """
+            {"id":42,"name":"Stable tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/stable-v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}
+            """;
+
+        var validResult = await RunStableTagPolicyAsync(valid);
+        Assert.True(validResult.ExitCode == 0,
+            $"Valid policy failed.{Environment.NewLine}{validResult.Error}{Environment.NewLine}{validResult.Output}");
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(broadExclusion)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(alwaysBypass)).ExitCode);
+        Assert.NotEqual(0, (await RunStableTagPolicyAsync(hiddenBypassState)).ExitCode);
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunStableTagPolicyAsync(string detailJson)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "PiPlayTagPolicyTest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var detailPath = Path.Combine(tempRoot, "detail.json");
+            var fakeGh = Path.Combine(tempRoot, "gh.cmd");
+            await File.WriteAllTextAsync(detailPath, detailJson);
+            await File.WriteAllTextAsync(fakeGh, """
+                @echo off
+                echo %* | %SystemRoot%\System32\findstr.exe /C:"includes_parents" >nul
+                if not errorlevel 1 (
+                  echo [{"id":42}]
+                  exit /b 0
+                )
+                type "%PIPLAY_TEST_RULESET_DETAIL%"
+                exit /b 0
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.Environment["PATH"] = tempRoot + Path.PathSeparator +
+                (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["PIPLAY_TEST_RULESET_DETAIL"] = detailPath;
+            startInfo.Environment["GH_TOKEN"] = "test-token";
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(RepoRoot, ".github", "scripts", "Test-StableTagPolicy.ps1"));
+            startInfo.ArgumentList.Add("-Repository");
+            startInfo.ArgumentList.Add("espensev/PiPlay");
+
+            using var process = new Process { StartInfo = startInfo };
+            Assert.True(process.Start(), "Stable tag policy test process did not start.");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            var exitTask = process.WaitForExitAsync();
+            var completed = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromSeconds(15)));
+            if (completed != exitTask)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best-effort timeout cleanup */ }
+                Assert.Fail("Stable tag policy test exceeded 15 seconds.");
+            }
+            await exitTask;
+            return (process.ExitCode, await output, await error);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
     }
 
     [Theory]
