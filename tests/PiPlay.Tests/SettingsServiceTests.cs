@@ -522,4 +522,87 @@ public class SettingsServiceTests : IDisposable
 
         Assert.False(File.Exists(corrupt), "Reset should clean up stale quarantines for a clean slate.");
     }
+
+    public static TheoryData<Func<Exception>> ReadFailures => new()
+    {
+        () => new IOException("transient lock"),
+        () => new UnauthorizedAccessException("access denied"),
+    };
+
+    // Readiness F-3: a read IO failure is not corruption. The original file must survive in
+    // place — no quarantine, no overwrite from defaults — including saves made by a DIFFERENT
+    // service instance (startup loads through one instance, windows save through their own).
+    [Theory]
+    [MemberData(nameof(ReadFailures))]
+    public void Read_io_failure_preserves_original_bytes_through_a_later_save_attempt(
+        Func<Exception> failure)
+    {
+        const string original = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"," +
+            "\"profiles\":[{\"name\":\"Lo-fi\",\"url\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}]}";
+        File.WriteAllText(_path, original);
+        var svc = new SettingsService(_path, _ => throw failure());
+
+        var loaded = svc.Load();
+
+        Assert.Equal("https://www.youtube.com/", loaded.LastUrl);   // defaults, never the unread file
+        Assert.Empty(loaded.Profiles);
+        Assert.Empty(Directory.GetFiles(_dir, "*.corrupt.*.json")); // not treated as corruption
+
+        svc.Save(new AppSettings());
+        new SettingsService(_path).Save(new AppSettings());          // cross-instance save also refused
+
+        Assert.Equal(original, File.ReadAllText(_path));             // original bytes intact
+        var recovered = new SettingsService(_path).Load();           // and still loadable afterwards
+        Assert.Equal("https://www.youtube.com/watch?v=dQw4w9WgXcQ", recovered.LastUrl);
+        Assert.Single(recovered.Profiles, p => p.Name == "Lo-fi");
+    }
+
+    [Fact]
+    public void Save_resumes_after_a_successful_reload_follows_the_read_failure()
+    {
+        const string original = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}";
+        File.WriteAllText(_path, original);
+        var svc = new SettingsService(_path, _ => throw new IOException("transient lock"));
+        svc.Load();
+        svc.Save(new AppSettings());
+        Assert.Equal(original, File.ReadAllText(_path));             // still refused before a reload
+
+        var settings = new SettingsService(_path).Load();            // successful read lifts the block
+        settings.AutoPopout = true;
+        new SettingsService(_path).Save(settings);
+
+        Assert.True(new SettingsService(_path).Load().AutoPopout);   // the write went through
+    }
+
+    [Fact]
+    public void Corrupt_json_still_quarantines_and_does_not_block_saves()
+    {
+        File.WriteAllText(_path, "{ this is not valid json ]]]");
+        var svc = new SettingsService(_path);
+
+        svc.Load();
+
+        Assert.Single(Directory.GetFiles(_dir, "*.corrupt.*.json"));
+        svc.Save(new AppSettings { LastUrl = "https://www.youtube.com/watch?v=y6120QOlsfU" });
+        Assert.True(File.Exists(_path));
+        Assert.Equal("https://www.youtube.com/watch?v=y6120QOlsfU", new SettingsService(_path).Load().LastUrl);
+    }
+
+    [Fact]
+    public void Reset_is_an_explicit_replacement_and_succeeds_after_a_read_failure()
+    {
+        const string original = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}";
+        File.WriteAllText(_path, original);
+        var svc = new SettingsService(_path, _ => throw new IOException("transient lock"));
+        svc.Load();
+        svc.Save(new AppSettings());
+        Assert.Equal(original, File.ReadAllText(_path));
+
+        var fresh = svc.Reset();                                      // deliberate user reset is allowed
+
+        Assert.Equal("https://www.youtube.com/", fresh.LastUrl);
+        Assert.Equal("https://www.youtube.com/", new SettingsService(_path).Load().LastUrl);
+        svc.Save(new AppSettings { AutoPopout = true });              // unblocked by the reset
+        Assert.True(new SettingsService(_path).Load().AutoPopout);
+    }
 }

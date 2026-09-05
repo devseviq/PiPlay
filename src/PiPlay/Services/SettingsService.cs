@@ -8,7 +8,9 @@ namespace PiPlay.Services;
 /// <summary>
 /// Loads/saves <see cref="AppSettings"/> with atomic writes and corruption recovery
 /// (spec 12.6, 26.4). Never loses settings to a partial write; a corrupt file is
-/// quarantined and defaults are used.
+/// quarantined and defaults are used. A read IO failure (lock, permissions, disk) is
+/// not corruption: the file is left untouched and every save is refused until a load
+/// succeeds, so defaults never overwrite data this process failed to read.
 /// </summary>
 public sealed class SettingsService
 {
@@ -20,8 +22,17 @@ public sealed class SettingsService
     };
 
     private readonly string _path;
+    private readonly Func<string, string> _readAllText;
 
-    public SettingsService(string? path = null) => _path = path ?? AppPaths.SettingsFile;
+    // Process-wide because the settings file is: startup loads through one instance while
+    // windows save through their own, and unread data must be protected across all of them.
+    private static volatile bool _settingsFileUnread;
+
+    public SettingsService(string? path = null, Func<string, string>? readAllText = null)
+    {
+        _path = path ?? AppPaths.SettingsFile;
+        _readAllText = readAllText ?? File.ReadAllText;
+    }
 
     public AppSettings Load()
     {
@@ -33,32 +44,53 @@ public sealed class SettingsService
             if (!File.Exists(_path))
             {
                 Log.Info("Settings file not found; starting with defaults.");
+                _settingsFileUnread = false;
                 return Sanitize(new AppSettings());
             }
 
-            var json = File.ReadAllText(_path);
-            using var document = JsonDocument.Parse(json);
-            var seedThemeFromLegacy = !HasThemeBlock(document.RootElement);
-            var settings = document.RootElement.Deserialize<AppSettings>(Options);
-            if (settings is null)
+            var json = _readAllText(_path);
+            try
             {
+                using var document = JsonDocument.Parse(json);
+                var seedThemeFromLegacy = !HasThemeBlock(document.RootElement);
+                var settings = document.RootElement.Deserialize<AppSettings>(Options);
+                if (settings is not null)
+                {
+                    _settingsFileUnread = false;
+                    return Sanitize(settings, seedThemeFromLegacy);
+                }
+
                 Log.Warn("Settings deserialized to null; quarantining and using defaults.");
-                Quarantine();
-                return Sanitize(new AppSettings());
+            }
+            catch (JsonException ex)
+            {
+                Log.Error("Settings file is corrupt; quarantining and using defaults.", ex);
             }
 
-            return Sanitize(settings, seedThemeFromLegacy);
+            Quarantine();
+            _settingsFileUnread = false;
+            return Sanitize(new AppSettings());
         }
         catch (Exception ex)
         {
-            Log.Error("Failed to load settings; quarantining and using defaults.", ex);
-            Quarantine();
+            // Read failure, not corruption: the file was never observed. Keep it in place
+            // (no quarantine — the same lock would break the move) and make every Save
+            // refuse until some load succeeds, so defaults cannot overwrite unread data.
+            _settingsFileUnread = true;
+            Log.Error("Failed to read settings; using defaults and leaving the file untouched.", ex);
             return Sanitize(new AppSettings());
         }
     }
 
     public void Save(AppSettings settings)
     {
+        if (_settingsFileUnread)
+        {
+            Log.Error("Refusing to save settings: the existing file could not be read this " +
+                "session; saving would overwrite data that was never read.");
+            return;
+        }
+
         try
         {
             Sanitize(settings);
@@ -75,6 +107,8 @@ public sealed class SettingsService
     /// Reset app state (REQ-PRIVACY-01): atomically replace settings.json with defaults and drop
     /// stale corrupt-quarantine files. Touches ONLY the settings-file path — never the WebView2
     /// user-data folder or logs — so the user stays signed in to YouTube. Returns the defaults.
+    /// Allowed even after a failed read: this is an explicit user replacement of state, not a
+    /// silent default-overwrite, and it clears the unread-file save block.
     /// </summary>
     public AppSettings Reset()
     {
@@ -94,6 +128,7 @@ public sealed class SettingsService
             var tmp = _path + ".tmp";
             if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
 
+            _settingsFileUnread = false;
             Log.Info("App state reset to defaults (WebView2 session preserved).");
         }
         catch (Exception ex)
