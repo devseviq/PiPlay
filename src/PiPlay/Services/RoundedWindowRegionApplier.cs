@@ -24,11 +24,15 @@ internal static class RoundedWindowRegionApplier
         if (geometry is null) return false;
 
         var g = geometry.Value;
+        // CreateRoundRectRgn excludes the window's final right/bottom straight-edge pixel unless
+        // the exclusive endpoints run one past the bounds (verified natively with PtInRegion);
+        // int.MaxValue dimensions cannot come from GetWindowRect but would overflow the +1.
+        if (g.WidthPx == int.MaxValue || g.HeightPx == int.MaxValue) return false;
         var region = CreateRoundRectRgn(
             0,
             0,
-            g.WidthPx,
-            g.HeightPx,
+            g.WidthPx + 1,
+            g.HeightPx + 1,
             g.EllipseWidthPx,
             g.EllipseHeightPx);
         if (region == IntPtr.Zero) return false;

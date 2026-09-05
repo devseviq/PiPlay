@@ -65,9 +65,25 @@ public class RoundedWindowRegionPolicyTests
     [InlineData(0, 540, 22, 96)]
     [InlineData(960, 0, 22, 96)]
     [InlineData(960, 540, 0, 96)]
+    [InlineData(960, 540, double.NaN, 96)]
+    [InlineData(960, 540, double.PositiveInfinity, 96)]
     [InlineData(960, 540, 22, 0)]
     public void Geometry_rejects_invalid_inputs(int width, int height, double radius, uint dpi) =>
         Assert.Null(RoundedWindowRegionPolicy.CreateGeometry(width, height, radius, dpi));
+
+    [Fact]
+    public void Geometry_passes_extreme_dimensions_through_and_clamps_an_absurd_radius()
+    {
+        // The applier adds 1 to these endpoints for GDI, so the largest dimensions must survive the
+        // policy unchanged and the diameter must stay the largest representable value.
+        var geometry = RoundedWindowRegionPolicy.CreateGeometry(int.MaxValue, int.MaxValue, double.MaxValue, 96);
+
+        Assert.NotNull(geometry);
+        Assert.Equal(int.MaxValue, geometry.Value.WidthPx);
+        Assert.Equal(int.MaxValue, geometry.Value.HeightPx);
+        Assert.Equal(int.MaxValue - 1, geometry.Value.EllipseWidthPx);
+        Assert.Equal(int.MaxValue - 1, geometry.Value.EllipseHeightPx);
+    }
 
     [Theory]
     [InlineData(0, 0, 960, 1040, true)]      // snapped left half
