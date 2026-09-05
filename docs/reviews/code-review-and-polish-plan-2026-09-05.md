@@ -19,6 +19,8 @@ The historical fix bundle should not be applied as written. The useful findings 
 
 Product authority remains the [specification](../PiPlay_Product_Engineering_Spec.md), [accepted decisions](../DECISIONS.md), [theme values](../Theme_Preset_Differences.md), and [page-script policy](../YouTube_Compliance.md). This document proposes work; it does not change those contracts. The [September 2 readiness review](review-controller-2026-09-02-piplay-readiness.md) remains a dated source of related findings.
 
+The [August 29 frame-and-edge audit](review-2026-08-29-window-frame-and-edges.md) and its screenshot are retained as historical evidence from a previously separate branch. Its verdict, test counts, and architecture alternatives belong to that earlier baseline. Revalidate its unresolved native-window hypotheses before adding work to this plan; later polish already addresses some of its control-size and wording findings.
+
 ## What survives the old review
 
 | Grok item | Current conclusion | Action |
