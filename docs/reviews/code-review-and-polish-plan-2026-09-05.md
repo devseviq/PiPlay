@@ -21,6 +21,20 @@ Product authority remains the [specification](../PiPlay_Product_Engineering_Spec
 
 The [August 29 frame-and-edge audit](review-2026-08-29-window-frame-and-edges.md) and its screenshot are retained as historical evidence from a previously separate branch. Its verdict, test counts, and architecture alternatives belong to that earlier baseline. Revalidate its unresolved native-window hypotheses before adding work to this plan; later polish already addresses some of its control-size and wording findings.
 
+## Discarded hardening branch
+
+Disposition on 2026-09-05: `hardening/desk-candidate-automation` at `667661e3e8213a89be2b53cf549a1f92244b3d8e` is **superseded and discarded locally**, not awaiting integration. [PR #36](https://github.com/espensev/PiPlay/pull/36) was closed without merging on 2026-08-29; its head and closed state were checked again for this cleanup.
+
+The [August 26 takeover review](https://github.com/espensev/PiPlay/blob/c5ba6a4ec9c6fa74d5b29be7479eb058ca6c4ad2/docs/reviews/review-2026-08-26-pr-36-takeover.md) records the rejection. The reasons for excluding the branch are:
+
+- Its changes delete `DECISIONS.md`, `Theme_Preset_Differences.md`, and `YouTube_Compliance.md`, which remain canonical under the current `docs/AGENTS.md`. This deletion set was checked again against the branch's merge base.
+- It predates released playlist-only timestamp normalization (`d287315`) and stricter UI-smoke foreground/capture checks (`e1f45d6`). The takeover review found conflicts in their implementation and evidence surfaces; choosing the older branch versions could undo those corrections. The old conflict count belongs to that review's baseline, not a new merge simulation.
+- Its desk-candidate workflow and documentation design were superseded. Importing the whole branch would reintroduce an older publication/verification route instead of extending the consolidated source and current test-package flow.
+
+Individual hardening ideas may be reconsidered as small changes against current `main` when backed by a reproduced problem and focused verification. They are not a reason to revive this branch wholesale.
+
+Local cleanup is complete: the separate `retired-local-branches.bundle` archive and both local remote-tracking references for the rejected branch were removed. The other archived branch heads were verified as ancestors of `main` before deleting the bundle. The earlier redundant checkout and local branch were already removed; one primary worktree and one local branch remain. The consolidation CI log is retained. Remote branch/PR history remains available as provenance; this cleanup does not rewrite Git object history.
+
 ## What survives the old review
 
 | Grok item | Current conclusion | Action |
@@ -131,7 +145,7 @@ Acceptance: corner exclusion, all four straight edges, just-outside rejection, a
 
 | Batch | Concrete scope | Completion evidence |
 |---|---|---|
-| 0. Select the source baseline — complete | The primary `main` now includes `ba520eb` and the existing presentation changes. Continue future implementation from this consolidated checkout. | Fast-forward completed; 1,155 tests passed; redundant worktree and local branches removed with branch history archived. |
+| 0. Select the source baseline — complete | The primary `main` now includes `ba520eb` and the existing presentation changes. Continue future implementation from this consolidated checkout. | Fast-forward completed; 1,155 tests passed; redundant worktree and local branches removed. Mergeable history is retained in `main`; the rejected hardening archive was discarded as explained above. |
 | 1. Link ownership and return | PP-01 plus PP-04 and PP-05. Write the incoming-link contract and test receiving-side behavior before changing routing. | A → external B → return works with Auto on/off, including transition and close races. |
 | 2. Browser and replay reliability | PP-02 and PP-03 as separate focused changes. Also carry forward readiness F-3: distinguish settings read IO failures from corrupt JSON and prevent defaults overwriting unread data. `SettingsService.Load/Save` still has the broad catch/unconditional-save behavior on both compared commits. | Recovery and DOM harness cases pass; an injected settings read failure preserves original bytes through a later save attempt. |
 | 3. Privacy and native geometry | PP-06, PP-07, PP-08. The small PP-08 endpoint change can be taken earlier once its native regression assertions exist. | Late-clear state tests, coordinate round trips, and edge-membership tests; rendered placement/corner checks. |
