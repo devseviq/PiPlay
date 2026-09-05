@@ -5,6 +5,14 @@ using Microsoft.Web.WebView2.Core;
 
 namespace PiPlay.Services;
 
+/// <summary>Ad posture used to gate host page writes. Unknown fails closed (YouTube_Compliance.md).</summary>
+public enum YouTubeAdState
+{
+    Clear,
+    Ad,
+    Unknown
+}
+
 /// <summary>A snapshot of the YouTube &lt;video&gt; element. Duration is nullable (live/unknown).</summary>
 public sealed record PlayerState(
     int CurrentTime,
@@ -28,6 +36,20 @@ public static class YouTubeDomBridge
         "(document.querySelector('#movie_player video.html5-main-video')" +
         "||document.querySelector('video.html5-main-video')" +
         "||document.querySelector('video'))";
+
+    // YouTube_Compliance.md: while the player element carries an ad class, PiPlay must not write
+    // currentTime, change playback rate, or invoke Next; a missing player is unknown and fails
+    // closed. Host writers embed this guard so the probe and the write are one atomic script.
+    // The Focused overlay's isAdActive uses the same selector and class names.
+    private const string AdPlayerSelector = "#movie_player,.html5-video-player";
+    private const string AdShowingClass = "ad-showing";
+    private const string AdInterruptingClass = "ad-interrupting";
+
+    private static readonly string AdStateGuardScript = $@"
+  const adPlayer = document.querySelector('{AdPlayerSelector}');
+  const adState = !adPlayer ? 'unknown'
+    : (adPlayer.classList.contains('{AdShowingClass}') || adPlayer.classList.contains('{AdInterruptingClass}')) ? 'ad' : 'clear';";
+
 
     private static readonly string ReadStateScript = $@"
 (() => {{
@@ -151,25 +173,100 @@ public static class YouTubeDomBridge
             $"(() => {{ const v = {VideoSelector}; if (v) {{ const p = v.play(); if (p && p.catch) p.catch(() => {{}}); }} }})()",
             "play");
 
+    /// <summary>
+    /// Classify the page's current ad posture. Clear means host seek/rate writes may run;
+    /// Ad and Unknown (including execution failure) must keep them disabled.
+    /// </summary>
+    public static async Task<YouTubeAdState> ReadAdStateAsync(CoreWebView2 webView)
+    {
+        var raw = await ExecuteAsync(webView, BuildAdStateProbeScript(), "ad-state read");
+        return ClassifyAdStateResult(raw);
+    }
+
+    /// <summary>Injected executor seam for the ad-state classification contract.</summary>
+    internal static async Task<YouTubeAdState> ReadAdStateAsync(
+        Func<string, Task<string>> executeScriptAsync,
+        TimeSpan? executionTimeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(executeScriptAsync);
+        try
+        {
+            var value = await AsyncOperationDeadline.RunAsync(
+                _ => executeScriptAsync(BuildAdStateProbeScript()),
+                executionTimeout ?? ExecutionTimeout);
+            return ClassifyAdStateResult(value);
+        }
+        catch { return YouTubeAdState.Unknown; }
+    }
+
+    internal static string BuildAdStateProbeScript() => $@"
+(() => {{
+  {AdStateGuardScript}
+  return adState;
+}})()";
+
+    private static YouTubeAdState ClassifyAdStateResult(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw) || raw == "null") return YouTubeAdState.Unknown;
+        try
+        {
+            return JsonSerializer.Deserialize<string?>(raw) switch
+            {
+                "clear" => YouTubeAdState.Clear,
+                "ad" => YouTubeAdState.Ad,
+                _ => YouTubeAdState.Unknown
+            };
+        }
+        catch
+        {
+            return YouTubeAdState.Unknown;
+        }
+    }
+
     public static Task SeekAsync(CoreWebView2 webView, int seconds) =>
-        ExecuteVoidAsync(webView,
-            $"(() => {{ const v = {VideoSelector}; if (v) {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }} }})()",
-            "seek");
+        ExecuteVoidAsync(webView, BuildSeekScript(seconds), "seek");
+
+    internal static string BuildSeekScript(int seconds) => $@"
+(() => {{
+  {AdStateGuardScript}
+  const v = {VideoSelector};
+  if (v && adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+}})()";
 
     public static Task SeekAndPauseAsync(CoreWebView2 webView, int seconds) =>
-        ExecuteVoidAsync(webView,
-            $"(() => {{ const v = {VideoSelector}; if (v) {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} v.pause(); }} }})()",
-            "seek-and-pause");
+        ExecuteVoidAsync(webView, BuildSeekAndPauseScript(seconds), "seek-and-pause");
+
+    internal static string BuildSeekAndPauseScript(int seconds) => $@"
+(() => {{
+  {AdStateGuardScript}
+  const v = {VideoSelector};
+  if (!v) return;
+  if (adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+  v.pause();
+}})()";
 
     public static Task SeekAndPlayAsync(CoreWebView2 webView, int seconds) =>
-        ExecuteVoidAsync(webView,
-            $"(() => {{ const v = {VideoSelector}; if (v) {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} const p = v.play(); if (p && p.catch) p.catch(() => {{}}); }} }})()",
-            "seek-and-play");
+        ExecuteVoidAsync(webView, BuildSeekAndPlayScript(seconds), "seek-and-play");
+
+    internal static string BuildSeekAndPlayScript(int seconds) => $@"
+(() => {{
+  {AdStateGuardScript}
+  const v = {VideoSelector};
+  if (!v) return;
+  if (adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+  const p = v.play(); if (p && p.catch) p.catch(() => {{}});
+}})()";
 
     public static Task ApplyPlaybackSettingsAsync(
         CoreWebView2 webView, double? volume, bool? muted, double? playbackRate)
     {
-        if (volume is null && muted is null && playbackRate is null) return Task.CompletedTask;
+        var script = BuildPlaybackSettingsScript(volume, muted, playbackRate);
+        return script is null ? Task.CompletedTask : ExecuteVoidAsync(webView, script, "playback-settings apply");
+    }
+
+    internal static string? BuildPlaybackSettingsScript(double? volume, bool? muted, double? playbackRate)
+    {
+        if (volume is null && muted is null && playbackRate is null) return null;
 
         static string Js(double value) => value.ToString("R", CultureInfo.InvariantCulture);
         var volumeScript = volume is null
@@ -182,14 +279,17 @@ public static class YouTubeDomBridge
             ? string.Empty
             : $"const rate = {Js(playbackRate.Value)}; if (Number.isFinite(rate) && rate > 0) {{ try {{ v.playbackRate = rate; }} catch (e) {{}} }}";
 
-        return ExecuteVoidAsync(webView, $@"
+        return $@"
 (() => {{
+  {AdStateGuardScript}
   const v = {VideoSelector};
   if (!v) return;
   {volumeScript}
   {mutedScript}
-  {rateScript}
-}})()", "playback-settings apply");
+  if (adState === 'clear') {{
+    {rateScript}
+  }}
+}})()";
     }
 
     /// <summary>Read the page's canonical URL (or location.href) for the currently playing item.</summary>
@@ -373,6 +473,8 @@ public static class YouTubeDomBridge
         var accentJson = JsonSerializer.Serialize(accentColor);
         var delay = Math.Clamp(fadeDelayMs, 500, 10_000);
         var fade = fadeEnabled ? "true" : "false";
+        var adShowingJson = JsonSerializer.Serialize(AdShowingClass);
+        var adInterruptingJson = JsonSerializer.Serialize(AdInterruptingClass);
 
         return $$"""
 (() => {
@@ -563,7 +665,7 @@ public static class YouTubeDomBridge
   }
 
   function playerElement() {
-    return document.querySelector("#movie_player,.html5-video-player");
+    return document.querySelector("{{AdPlayerSelector}}");
   }
 
   function video() {
@@ -572,8 +674,9 @@ public static class YouTubeDomBridge
 
   function isAdActive() {
     const player = boundPlayer && boundPlayer.isConnected ? boundPlayer : playerElement();
-    return !!(player && (player.classList.contains("ad-showing") ||
-      player.classList.contains("ad-interrupting")));
+    // A missing player element is unknown ad state and fails closed (YouTube_Compliance.md).
+    if (!player) return true;
+    return player.classList.contains({{adShowingJson}}) || player.classList.contains({{adInterruptingJson}});
   }
 
   function formatTime(value) {

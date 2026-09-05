@@ -32,6 +32,11 @@ public class YouTubeDomBehaviorTests
                 Nonce, "#2BAED0", fadeEnabled: true, fadeDelayMs: 2500),
             focusedAuthorizeScript = YouTubeDomBridge.BuildPlayerFirstDocumentTokenScript(DocumentToken),
             focusedStateRequestScript = YouTubeDomBridge.BuildPlayerFirstStateRequestScript(),
+            adStateProbeScript = YouTubeDomBridge.BuildAdStateProbeScript(),
+            seekScript = YouTubeDomBridge.BuildSeekScript(95),
+            seekAndPauseScript = YouTubeDomBridge.BuildSeekAndPauseScript(95),
+            seekAndPlayScript = YouTubeDomBridge.BuildSeekAndPlayScript(95),
+            playbackSettingsScript = YouTubeDomBridge.BuildPlaybackSettingsScript(0.4, muted: true, playbackRate: 1.75),
         });
 
         var startInfo = new ProcessStartInfo

@@ -1826,6 +1826,144 @@ public class WpfRuntimeTests : IDisposable
             w.Close();
         });
 
+    [Theory]
+    [InlineData(320, 180)]
+    [InlineData(480, 270)]
+    [InlineData(640, 360)]
+    public void Rounded_region_keeps_the_final_pixel_of_every_straight_edge_and_cuts_all_four_corners(
+        int widthPx,
+        int heightPx) =>
+        StaTestThread.Invoke(() =>
+        {
+            // The review plan's native probe sizes: a 22-DIP Popout radius at 96/144/192 DPI lands
+            // on exactly these physical proportions, so the three cases represent the supported
+            // scale range. A plain borderless window gives exact physical control of the region.
+            var w = new Window
+            {
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize,
+                ShowActivated = false,
+                ShowInTaskbar = false,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+            };
+            try
+            {
+                var hwnd = new WindowInteropHelper(w).EnsureHandle();
+                Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, widthPx, heightPx, SwpNoZOrder | SwpNoActivate));
+                Assert.True(GetWindowRect(hwnd, out var rect));
+                var width = rect.Right - rect.Left;
+                var height = rect.Bottom - rect.Top;
+                Assert.Equal(widthPx, width);
+                Assert.Equal(heightPx, height);
+
+                Assert.True(RoundedWindowRegionApplier.Apply(hwnd, 22));
+                Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+
+                // All four corners stay cut.
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width - 1, 0));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, height - 1));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width - 1, height - 1));
+                // Every straight edge keeps its final pixel (the right/bottom pair is the endpoint
+                // regression: GDI dropped them before the exclusive endpoints ran one past the bounds).
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, height / 2));
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width / 2, 0));
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width - 1, height / 2));
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width / 2, height - 1));
+                // The region still ends with the window: one pixel past the last row/column is outside.
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width, height / 2));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width / 2, height));
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, width / 2, height / 2));
+            }
+            finally
+            {
+                w.Close();
+            }
+        });
+
+    [Fact]
+    public void Rounded_region_clears_for_a_snap_like_placement_and_reapplies_when_floating_again() =>
+        StaTestThread.Invoke(() =>
+        {
+            var w = new PlayerWindow(
+                environment: null!,
+                url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                topmost: false,
+                placement: null,
+                defaultWidth: 960,
+                defaultHeight: 540,
+                fadeEnabled: true,
+                dwmCornerMode: DwmCornerMode.Round,
+                popoutCornerRadiusDip: 22)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual,
+            };
+            var hwnd = new WindowInteropHelper(w).EnsureHandle();
+
+            // Floating start: the rounded region is on.
+            Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
+            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+            Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+            Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+
+            // Place as the OS would snap a left half: work-area top-left, half width, full height.
+            var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+            var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
+            Assert.True(GetMonitorInfo(monitor, ref info));
+            var halfWidth = (info.Work.Right - info.Work.Left) / 2;
+            var workHeight = info.Work.Bottom - info.Work.Top;
+            Assert.True(SetWindowPos(
+                hwnd, IntPtr.Zero, info.Work.Left, info.Work.Top, halfWidth, workHeight,
+                SwpNoZOrder | SwpNoActivate));
+            Assert.True(RoundedWindowRegionApplier.IsSnapLike(hwnd));
+
+            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+            Assert.False(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+            Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+
+            // Floating restore reapplies the region (ADR: maximize/snap clears, floating reapplies).
+            Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
+            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+            Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+            Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+            w.Close();
+        });
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor;
+        public NativeRect Work;
+        public uint Flags;
+    }
+
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+    private const uint MonitorDefaultToNearest = 2;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(
+        IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref NativeMonitorInfo info);
+
     [Fact]
     public void MainWindow_applies_the_theme_corner_mode_at_source_initialized() => StaTestThread.Invoke(() =>
     {
