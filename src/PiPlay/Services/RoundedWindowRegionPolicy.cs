@@ -37,7 +37,13 @@ internal static class RoundedWindowRegionPolicy
         var maxRadiusPx = Math.Min(widthPx, heightPx) / 2;
         if (maxRadiusPx <= 0) return null;
 
+        // Clamp in double space BEFORE any int cast: scaling a huge DIP radius by DPI can
+        // overflow to Infinity, and converting a non-finite or out-of-range double to int is
+        // unspecified in C# — the clamp itself must produce a finite, in-range value.
+        var maxRadius = (double)maxRadiusPx;
         var scaled = radiusDip * dpi / DefaultDpi;
+        if (!double.IsFinite(scaled)) scaled = maxRadius;
+        scaled = Math.Min(scaled, maxRadius);
         var radiusPx = Math.Clamp(
             (int)Math.Round(scaled, MidpointRounding.AwayFromZero),
             1,
