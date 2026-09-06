@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
 using PiPlay.Models;
@@ -24,9 +25,11 @@ public sealed class SettingsService
     private readonly string _path;
     private readonly Func<string, string> _readAllText;
 
-    // Process-wide because the settings file is: startup loads through one instance while
-    // windows save through their own, and unread data must be protected across all of them.
-    private static volatile bool _settingsFileUnread;
+    // Process-wide because the settings file is shared: startup loads through one instance
+    // while windows save through their own, and unread data must be protected across all of
+    // them. Keyed by settings path so a read failure on one file never blocks saves aimed at
+    // a different file — and cannot leak between test classes using their own temp paths.
+    private static readonly ConcurrentDictionary<string, bool> _unreadByPath = new();
 
     public SettingsService(string? path = null, Func<string, string>? readAllText = null)
     {
@@ -44,7 +47,7 @@ public sealed class SettingsService
             if (!File.Exists(_path))
             {
                 Log.Info("Settings file not found; starting with defaults.");
-                _settingsFileUnread = false;
+                _unreadByPath.TryRemove(_path, out _);
                 return Sanitize(new AppSettings());
             }
 
@@ -56,7 +59,7 @@ public sealed class SettingsService
                 var settings = document.RootElement.Deserialize<AppSettings>(Options);
                 if (settings is not null)
                 {
-                    _settingsFileUnread = false;
+                    _unreadByPath.TryRemove(_path, out _);
                     return Sanitize(settings, seedThemeFromLegacy);
                 }
 
@@ -68,7 +71,7 @@ public sealed class SettingsService
             }
 
             Quarantine();
-            _settingsFileUnread = false;
+            _unreadByPath.TryRemove(_path, out _);
             return Sanitize(new AppSettings());
         }
         catch (Exception ex)
@@ -76,7 +79,7 @@ public sealed class SettingsService
             // Read failure, not corruption: the file was never observed. Keep it in place
             // (no quarantine — the same lock would break the move) and make every Save
             // refuse until some load succeeds, so defaults cannot overwrite unread data.
-            _settingsFileUnread = true;
+            _unreadByPath[_path] = true;
             Log.Error("Failed to read settings; using defaults and leaving the file untouched.", ex);
             return Sanitize(new AppSettings());
         }
@@ -84,7 +87,7 @@ public sealed class SettingsService
 
     public void Save(AppSettings settings)
     {
-        if (_settingsFileUnread)
+        if (_unreadByPath.ContainsKey(_path))
         {
             Log.Error("Refusing to save settings: the existing file could not be read this " +
                 "session; saving would overwrite data that was never read.");
@@ -128,7 +131,7 @@ public sealed class SettingsService
             var tmp = _path + ".tmp";
             if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
 
-            _settingsFileUnread = false;
+            _unreadByPath.TryRemove(_path, out _);
             Log.Info("App state reset to defaults (WebView2 session preserved).");
         }
         catch (Exception ex)

@@ -605,4 +605,30 @@ public class SettingsServiceTests : IDisposable
         svc.Save(new AppSettings { AutoPopout = true });              // unblocked by the reset
         Assert.True(new SettingsService(_path).Load().AutoPopout);
     }
+
+    // Readiness F-3 isolation: the unread-file save block is keyed by settings path, so a read
+    // failure on one file must never refuse saves aimed at a different file.
+    [Fact]
+    public void Read_failure_on_one_path_does_not_block_saves_on_another_path()
+    {
+        var dirA = Path.Combine(_dir, "a");
+        var dirB = Path.Combine(_dir, "b");
+        Directory.CreateDirectory(dirA);
+        Directory.CreateDirectory(dirB);
+        var pathA = Path.Combine(dirA, "settings.json");
+        var pathB = Path.Combine(dirB, "settings.json");
+        const string originalA = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}";
+        File.WriteAllText(pathA, originalA);
+
+        var svcA = new SettingsService(pathA, _ => throw new IOException("transient lock"));
+        svcA.Load();                                                   // flags path A as unread
+
+        var svcB = new SettingsService(pathB);
+        svcB.Save(new AppSettings { LastUrl = "https://www.youtube.com/watch?v=y6120QOlsfU" });
+
+        Assert.True(File.Exists(pathB));                               // B's save was not blocked
+        Assert.Equal("https://www.youtube.com/watch?v=y6120QOlsfU", svcB.Load().LastUrl);
+        svcA.Save(new AppSettings());                                  // A is still refused
+        Assert.Equal(originalA, File.ReadAllText(pathA));
+    }
 }
