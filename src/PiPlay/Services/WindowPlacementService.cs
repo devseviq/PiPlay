@@ -12,10 +12,16 @@ namespace PiPlay.Services;
 /// Uses Win32 placement APIs directly (pixel coordinates) so it is correct under
 /// PerMonitor V2 DPI without any extra dependency. PiPlay never restores a window
 /// fully off-screen.
+/// <para>
+/// Coordinate spaces (PP-07): <c>WINDOWPLACEMENT.rcNormalPosition</c> is workspace-relative for
+/// ordinary top-level windows and screen-relative for <c>WS_EX_TOOLWINDOW</c> windows. Persisted
+/// <see cref="PlacementData"/>, monitor lookup, and clamping all use virtual-screen pixels; the
+/// conversion happens here, at the Win32 boundary, via <see cref="PlacementMath"/>.
+/// </para>
 /// </summary>
 public static class WindowPlacementService
 {
-    /// <summary>Capture the window's normal-position bounds and the monitor it lives on.</summary>
+    /// <summary>Capture the window's normal-position bounds (screen pixels) and the monitor it lives on.</summary>
     public static PlacementData? TryCapture(Window window)
     {
         try
@@ -26,17 +32,21 @@ public static class WindowPlacementService
             var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
             if (!GetWindowPlacement(hwnd, ref wp)) return null;
 
-            var r = wp.rcNormalPosition;
+            var raw = wp.rcNormalPosition;
+            var screen = PlacementMath.WorkspaceToScreen(
+                ToRectI(raw), GetPrimaryWorkArea(), IsToolWindow(hwnd));
             var data = new PlacementData
             {
-                X = r.Left,
-                Y = r.Top,
-                Width = r.Right - r.Left,
-                Height = r.Bottom - r.Top,
+                X = screen.Left,
+                Y = screen.Top,
+                Width = screen.Width,
+                Height = screen.Height,
                 Maximized = wp.showCmd == SW_SHOWMAXIMIZED,
                 DpiScale = GetDpiScaleSafe(window),
+                CoordinateSpace = PlacementData.ScreenCoordinateSpace,
             };
 
+            var r = ToRect(screen);
             var monitor = MonitorFromRect(ref r, MONITOR_DEFAULTTONEAREST);
             if (TryGetMonitorInfo(monitor, out var mi))
             {
@@ -60,19 +70,17 @@ public static class WindowPlacementService
         {
             var hwnd = new WindowInteropHelper(window).EnsureHandle();
 
-            var work = ResolveWorkArea(data);
-            var target = new RECT
-            {
-                Left = data.X,
-                Top = data.Y,
-                Right = data.X + data.Width,
-                Bottom = data.Y + data.Height,
-            };
-            var clamped = Clamp(target, work);
+            // Monitor lookup and clamping happen in screen space; legacy unmarked data (a raw
+            // rcNormalPosition capture) is lifted into screen space first.
+            var toolWindow = IsToolWindow(hwnd);
+            var primaryWork = GetPrimaryWorkArea();
+            var target = PlacementMath.ToScreenRect(data, primaryWork, toolWindow);
+            var work = ResolveWorkArea(data, target);
+            var clamped = PlacementMath.Clamp(target, ToRectI(work));
 
             var wp = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
             GetWindowPlacement(hwnd, ref wp); // seed with current values
-            wp.rcNormalPosition = clamped;
+            wp.rcNormalPosition = ToRect(PlacementMath.ScreenToWorkspace(clamped, primaryWork, toolWindow));
             wp.showCmd = data.Maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
             wp.flags = 0;
             SetWindowPlacement(hwnd, ref wp);
@@ -83,7 +91,9 @@ public static class WindowPlacementService
         }
     }
 
-    private static RECT ResolveWorkArea(PlacementData data)
+    /// <param name="data">Saved placement (monitor identity and fallback work area).</param>
+    /// <param name="screenTarget">The saved bounds already converted to screen pixels.</param>
+    private static RECT ResolveWorkArea(PlacementData data, RectI screenTarget)
     {
         var monitors = EnumerateMonitors();
 
@@ -95,14 +105,8 @@ public static class WindowPlacementService
                     return m.rcWork;
         }
 
-        // Otherwise the nearest monitor to the saved rectangle.
-        var target = new RECT
-        {
-            Left = data.X,
-            Top = data.Y,
-            Right = data.X + data.Width,
-            Bottom = data.Y + data.Height,
-        };
+        // Otherwise the nearest monitor to the saved rectangle (MonitorFromRect takes screen pixels).
+        var target = ToRect(screenTarget);
         var hmon = MonitorFromRect(ref target, MONITOR_DEFAULTTONEAREST);
         if (TryGetMonitorInfo(hmon, out var mi)) return mi.rcWork;
 
@@ -112,14 +116,23 @@ public static class WindowPlacementService
         return new RECT { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
     }
 
-    private static RECT Clamp(RECT r, RECT work)
+    /// <summary>Primary monitor work area in screen pixels; its origin is the workspace offset.</summary>
+    private static RectI GetPrimaryWorkArea()
     {
-        // Geometry lives in PlacementMath so it can be unit-tested without a Window/monitors.
-        var c = PlacementMath.Clamp(
-            new RectI(r.Left, r.Top, r.Right, r.Bottom),
-            new RectI(work.Left, work.Top, work.Right, work.Bottom));
-        return new RECT { Left = c.Left, Top = c.Top, Right = c.Right, Bottom = c.Bottom };
+        var work = new RECT();
+        // On failure the offset is (0,0): the window then round-trips exactly as before PP-07.
+        return SystemParametersInfoW(SPI_GETWORKAREA, 0, ref work, 0)
+            ? ToRectI(work)
+            : new RectI(0, 0, 0, 0);
     }
+
+    private static bool IsToolWindow(IntPtr hwnd) =>
+        (GetWindowLongPtrW(hwnd, GWL_EXSTYLE).ToInt64() & WS_EX_TOOLWINDOW) != 0;
+
+    private static RectI ToRectI(RECT r) => new(r.Left, r.Top, r.Right, r.Bottom);
+
+    private static RECT ToRect(RectI r) =>
+        new() { Left = r.Left, Top = r.Top, Right = r.Right, Bottom = r.Bottom };
 
     private static List<MONITORINFOEX> EnumerateMonitors()
     {
@@ -158,6 +171,9 @@ public static class WindowPlacementService
     private const int SW_SHOWNORMAL = 1;
     private const int SW_SHOWMAXIMIZED = 3;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const int GWL_EXSTYLE = -20;
+    private const long WS_EX_TOOLWINDOW = 0x80;
+    private const uint SPI_GETWORKAREA = 0x0030;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
@@ -203,4 +219,10 @@ public static class WindowPlacementService
 
     [DllImport("user32.dll")]
     private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindowLongPtrW(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll")]
+    private static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
 }

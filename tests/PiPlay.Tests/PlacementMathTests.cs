@@ -118,6 +118,25 @@ public class PlacementMathTests
         Assert.Equal(1920, clamped.MonitorWorkArea!.X);
     }
 
+    [Fact]
+    public void EnsureMinSize_carries_the_coordinate_space_marker()
+    {
+        // A screen-space capture must not be demoted to legacy (and re-offset) by the size floor.
+        var saved = new PlacementData
+        {
+            Width = 100, Height = 100, DpiScale = 1.0,
+            CoordinateSpace = PlacementData.ScreenCoordinateSpace,
+        };
+        var clamped = PlacementMath.EnsureMinSize(saved, 480, 270);
+        Assert.Equal(PlacementData.ScreenCoordinateSpace, clamped.CoordinateSpace);
+        Assert.True(clamped.IsScreenSpace);
+
+        // Legacy stays legacy: the restore path still owes it the workspace->screen lift.
+        var legacy = PlacementMath.EnsureMinSize(new PlacementData { Width = 100, Height = 100 }, 480, 270);
+        Assert.Null(legacy.CoordinateSpace);
+        Assert.False(legacy.IsScreenSpace);
+    }
+
     // --- ForNextLaunch: a closed-expanded popout must not relaunch expanded (overhaul Task 4) ---
 
     [Fact]
@@ -129,11 +148,13 @@ public class PlacementMathTests
             MonitorDeviceName = @"\\.\DISPLAY2",
             MonitorWorkArea = new RectData { X = 1920, Y = 0, Width = 1920, Height = 1080 },
             DpiScale = 1.5,
+            CoordinateSpace = PlacementData.ScreenCoordinateSpace,
         };
 
         var next = PlacementMath.ForNextLaunch(captured)!;
 
         Assert.False(next.Maximized);
+        Assert.Equal(PlacementData.ScreenCoordinateSpace, next.CoordinateSpace);
         // The captured bounds are the prior NORMAL rectangle (rcNormalPosition) — they all survive.
         Assert.Equal(100, next.X);
         Assert.Equal(50, next.Y);
@@ -155,5 +176,173 @@ public class PlacementMathTests
     {
         // No capture (e.g. the window never got an HWND) stays no capture.
         Assert.Null(PlacementMath.ForNextLaunch(null));
+    }
+
+    // --- Coordinate spaces (PP-07): rcNormalPosition is workspace-relative for ordinary windows and
+    // screen-relative for WS_EX_TOOLWINDOW; persisted/lookup/clamp all use screen pixels. ---
+
+    // Primary work areas for a 1920x1080 primary monitor with the taskbar on each edge.
+    private static readonly RectI BottomTaskbar = new(0, 0, 1920, 1040);   // origin (0,0)
+    private static readonly RectI TopTaskbar = new(0, 40, 1920, 1080);     // origin (0,40)
+    private static readonly RectI LeftTaskbar = new(60, 0, 1920, 1080);    // origin (60,0)
+
+    [Fact]
+    public void Top_taskbar_offsets_workspace_to_screen_by_the_work_area_origin()
+    {
+        var workspace = new RectI(100, 100, 1060, 640);
+        var screen = PlacementMath.WorkspaceToScreen(workspace, TopTaskbar, toolWindow: false);
+        Assert.Equal(new RectI(100, 140, 1060, 680), screen);
+        Assert.Equal(workspace.Width, screen.Width);
+        Assert.Equal(workspace.Height, screen.Height);
+    }
+
+    [Fact]
+    public void Left_taskbar_offsets_workspace_to_screen_horizontally()
+    {
+        var workspace = new RectI(100, 100, 1060, 640);
+        var screen = PlacementMath.WorkspaceToScreen(workspace, LeftTaskbar, toolWindow: false);
+        Assert.Equal(new RectI(160, 100, 1120, 640), screen);
+    }
+
+    [Fact]
+    public void Screen_to_workspace_is_the_inverse_offset()
+    {
+        var screen = new RectI(100, 140, 1060, 680);
+        Assert.Equal(new RectI(100, 100, 1060, 640),
+            PlacementMath.ScreenToWorkspace(screen, TopTaskbar, toolWindow: false));
+        Assert.Equal(new RectI(40, 140, 1000, 680),
+            PlacementMath.ScreenToWorkspace(screen, LeftTaskbar, toolWindow: false));
+    }
+
+    [Fact]
+    public void Bottom_taskbar_origin_is_zero_so_workspace_and_screen_coincide()
+    {
+        var r = new RectI(100, 100, 1060, 640);
+        Assert.Equal(r, PlacementMath.WorkspaceToScreen(r, BottomTaskbar, toolWindow: false));
+        Assert.Equal(r, PlacementMath.ScreenToWorkspace(r, BottomTaskbar, toolWindow: false));
+    }
+
+    [Fact]
+    public void Tool_window_placement_is_already_screen_space_and_is_not_offset()
+    {
+        // WS_EX_TOOLWINDOW: Windows reports/accepts rcNormalPosition in screen pixels.
+        var r = new RectI(100, 100, 1060, 640);
+        Assert.Equal(r, PlacementMath.WorkspaceToScreen(r, TopTaskbar, toolWindow: true));
+        Assert.Equal(r, PlacementMath.ScreenToWorkspace(r, LeftTaskbar, toolWindow: true));
+
+        // Same input, ordinary window: the offset applies. The flag is the only difference.
+        Assert.NotEqual(r, PlacementMath.WorkspaceToScreen(r, TopTaskbar, toolWindow: false));
+    }
+
+    [Fact]
+    public void Negative_monitor_origin_converts_and_clamps_in_screen_space()
+    {
+        // Secondary monitor LEFT of the primary (x = -1920..0), primary taskbar on top.
+        var work2 = new RectI(-1920, 0, 0, 1080);
+        var screen = new RectI(-1800, 100, -840, 640); // 960x540 on the secondary
+
+        // Workspace form subtracts the primary origin; the negative x is untouched by a y-only offset.
+        var workspace = PlacementMath.ScreenToWorkspace(screen, TopTaskbar, toolWindow: false);
+        Assert.Equal(new RectI(-1800, 60, -840, 600), workspace);
+        Assert.Equal(screen, PlacementMath.WorkspaceToScreen(workspace, TopTaskbar, toolWindow: false));
+
+        // Clamping runs against the secondary's screen-space work area and leaves an inside rect alone.
+        Assert.Equal(screen, PlacementMath.Clamp(screen, work2));
+
+        // A rect hanging off the secondary's left edge is pulled back inside that monitor, not the primary.
+        var hanging = new RectI(-2400, 100, -1440, 640);
+        var c = PlacementMath.Clamp(hanging, work2);
+        Assert.Equal(-1920, c.Left);
+        Assert.True(c.Right <= work2.Right);
+        Assert.Equal(960, c.Width);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]      // bottom/right taskbar
+    [InlineData(0, 40)]     // top taskbar
+    [InlineData(60, 0)]     // left taskbar
+    [InlineData(-1920, 0)]  // synthetic negative offset: the conversion is a pure translation
+    public void Round_trip_screen_to_workspace_to_screen_is_identity(int originX, int originY)
+    {
+        // Repeated save/restore must not drift: capture (workspace->screen) then restore
+        // (screen->workspace) then capture again lands on the same screen rectangle.
+        var primary = new RectI(originX, originY, originX + 1920, originY + 1040);
+        var screen = new RectI(-300, 250, 660, 790);
+        foreach (var tool in new[] { false, true })
+        {
+            var workspace = PlacementMath.ScreenToWorkspace(screen, primary, tool);
+            Assert.Equal(screen, PlacementMath.WorkspaceToScreen(workspace, primary, tool));
+            Assert.Equal(workspace, PlacementMath.ScreenToWorkspace(
+                PlacementMath.WorkspaceToScreen(workspace, primary, tool), primary, tool));
+        }
+    }
+
+    [Fact]
+    public void Legacy_unmarked_data_is_read_as_a_workspace_relative_capture()
+    {
+        // Pre-marker settings stored the raw rcNormalPosition; with a top taskbar that value was
+        // 40px above where it appeared on screen. ToScreenRect lifts it by the current origin.
+        var legacy = new PlacementData { X = 100, Y = 100, Width = 960, Height = 540 };
+        Assert.Null(legacy.CoordinateSpace);
+        Assert.False(legacy.IsScreenSpace);
+
+        Assert.Equal(new RectI(100, 140, 1060, 680),
+            PlacementMath.ToScreenRect(legacy, TopTaskbar, toolWindow: false));
+        Assert.Equal(new RectI(160, 100, 1120, 640),
+            PlacementMath.ToScreenRect(legacy, LeftTaskbar, toolWindow: false));
+
+        // Bottom/right taskbar: origin (0,0), so legacy values keep working unchanged.
+        Assert.Equal(new RectI(100, 100, 1060, 640),
+            PlacementMath.ToScreenRect(legacy, BottomTaskbar, toolWindow: false));
+
+        // A legacy capture of a tool window was already screen pixels.
+        Assert.Equal(new RectI(100, 100, 1060, 640),
+            PlacementMath.ToScreenRect(legacy, TopTaskbar, toolWindow: true));
+    }
+
+    [Fact]
+    public void Marked_screen_data_is_used_without_conversion()
+    {
+        var marked = new PlacementData
+        {
+            X = 100, Y = 140, Width = 960, Height = 540,
+            CoordinateSpace = PlacementData.ScreenCoordinateSpace,
+        };
+        Assert.True(marked.IsScreenSpace);
+        var expected = new RectI(100, 140, 1060, 680);
+        Assert.Equal(expected, PlacementMath.ToScreenRect(marked, TopTaskbar, toolWindow: false));
+        Assert.Equal(expected, PlacementMath.ToScreenRect(marked, LeftTaskbar, toolWindow: false));
+        Assert.Equal(expected, PlacementMath.ToScreenRect(marked, TopTaskbar, toolWindow: true));
+    }
+
+    [Fact]
+    public void Unrecognised_marker_falls_back_to_legacy_semantics()
+    {
+        // Only the exact "screen" marker (ordinal) is trusted; anything else is the raw capture.
+        var odd = new PlacementData { X = 100, Y = 100, Width = 960, Height = 540, CoordinateSpace = "Screen" };
+        Assert.False(odd.IsScreenSpace);
+        Assert.Equal(new RectI(100, 140, 1060, 680),
+            PlacementMath.ToScreenRect(odd, TopTaskbar, toolWindow: false));
+    }
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.5)]
+    public void Coordinate_conversion_is_pixel_only_and_independent_of_dpi_scale(double dpiScale)
+    {
+        // Placement bounds are physical pixels and the workspace offset is physical pixels; the
+        // saved DPI scale must not scale the offset (it exists only for the DIP minimum-size floor).
+        var legacy = new PlacementData { X = 100, Y = 100, Width = 960, Height = 540, DpiScale = dpiScale };
+        Assert.Equal(new RectI(100, 140, 1060, 680),
+            PlacementMath.ToScreenRect(legacy, TopTaskbar, toolWindow: false));
+
+        var marked = new PlacementData
+        {
+            X = 100, Y = 140, Width = 960, Height = 540, DpiScale = dpiScale,
+            CoordinateSpace = PlacementData.ScreenCoordinateSpace,
+        };
+        Assert.Equal(new RectI(100, 140, 1060, 680),
+            PlacementMath.ToScreenRect(marked, TopTaskbar, toolWindow: false));
     }
 }

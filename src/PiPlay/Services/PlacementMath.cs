@@ -56,6 +56,7 @@ public static class PlacementMath
             MonitorDeviceName = data.MonitorDeviceName,
             MonitorWorkArea = data.MonitorWorkArea,
             DpiScale = data.DpiScale,
+            CoordinateSpace = data.CoordinateSpace,
         };
     }
 
@@ -89,6 +90,43 @@ public static class PlacementMath
                     Height = data.MonitorWorkArea.Height,
                 },
             DpiScale = data.DpiScale,
+            CoordinateSpace = data.CoordinateSpace,
         };
     }
+
+    // --- Coordinate spaces (PP-07): WINDOWPLACEMENT.rcNormalPosition is workspace-relative for
+    // ordinary top-level windows (offset by the primary monitor's work-area origin, non-zero with
+    // a top/left taskbar) and screen-relative for WS_EX_TOOLWINDOW windows. Persisted placement,
+    // monitor lookup, and clamping all use virtual-screen pixels; these conversions sit at the
+    // Win32 boundary. They are pixel-only — DPI scale never enters the offset.
+
+    /// <summary>
+    /// Convert a <c>rcNormalPosition</c> rectangle to virtual-screen pixels. Ordinary windows are
+    /// offset by the primary work-area origin (<paramref name="primaryWorkArea"/>.Left/Top);
+    /// a tool window's placement is already screen-relative and passes through unchanged.
+    /// </summary>
+    public static RectI WorkspaceToScreen(RectI r, RectI primaryWorkArea, bool toolWindow) =>
+        toolWindow ? r : Offset(r, primaryWorkArea.Left, primaryWorkArea.Top);
+
+    /// <summary>
+    /// Convert virtual-screen pixels back to the <c>rcNormalPosition</c> space expected by
+    /// <c>SetWindowPlacement</c>. Exact inverse of <see cref="WorkspaceToScreen"/>.
+    /// </summary>
+    public static RectI ScreenToWorkspace(RectI r, RectI primaryWorkArea, bool toolWindow) =>
+        toolWindow ? r : Offset(r, -primaryWorkArea.Left, -primaryWorkArea.Top);
+
+    /// <summary>
+    /// The saved bounds as a virtual-screen rectangle. Marked screen-space data is used as-is;
+    /// legacy unmarked data is the raw capture of the same window and is converted with
+    /// <see cref="WorkspaceToScreen"/> using the current primary work-area origin (with a
+    /// bottom/right taskbar that origin is (0,0), so legacy and screen values coincide).
+    /// </summary>
+    public static RectI ToScreenRect(PlacementData data, RectI primaryWorkArea, bool toolWindow)
+    {
+        var r = new RectI(data.X, data.Y, data.X + data.Width, data.Y + data.Height);
+        return data.IsScreenSpace ? r : WorkspaceToScreen(r, primaryWorkArea, toolWindow);
+    }
+
+    private static RectI Offset(RectI r, int dx, int dy) =>
+        new(r.Left + dx, r.Top + dy, r.Right + dx, r.Bottom + dy);
 }
