@@ -120,7 +120,8 @@ public class XamlInvariantTests
             "BackButton", "ReloadButton", "HomeButton", "ProfileActionsButton", "ProfileActionsMenu",
             "SaveProfileMenuItem", "EditProfileMenuItem", "DeleteProfileMenuItem", "ShowPopoutButton",
             "SettingsButton", "MinimizeButton", "MaximizeButton", "CloseButton",
-            "SourcePlaceholder", "PlaceholderShowPopoutButton", "PlaceholderBringBackButton", "PlaceholderNoteText", "RuntimeErrorPanel", "RuntimeErrorText",
+            "SourcePlaceholder", "PlaceholderShowPopoutButton", "PlaceholderBringBackButton", "PlaceholderNoteText", "RuntimeErrorPanel", "RuntimeErrorHeading", "RuntimeErrorText", "RuntimeRetryButton",
+            "SettingsUnsavedHint",
         }},
         new object[] { "PlayerWindow.xaml", new[]
         {

@@ -56,6 +56,10 @@
         <TextBlock x:Name="PinnedHint" Text="• Pinned" FontSize="12" Margin="10,0,0,0"
                    Foreground="{DynamicResource AccentPrimary}" VerticalAlignment="Center"
                    Visibility="Collapsed" />
+        <TextBlock x:Name="SettingsUnsavedHint" Text="• Settings not saved" FontSize="12" Margin="10,0,0,0"
+                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
+                   Visibility="Collapsed"
+                   ToolTip="PiPlay could not read its settings file when it started, so changes made this session are not saved. Reset app state in Settings starts over with defaults." />
       </StackPanel>
 
       <!-- Caption buttons must opt out of the draggable caption area. -->
@@ -266,7 +270,7 @@
       <!-- WebView2 runtime-missing / init-failure recovery panel (spec 15.4, Q-6). -->
       <Border x:Name="RuntimeErrorPanel" Background="{DynamicResource AppBackground}" Visibility="Collapsed">
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
-          <TextBlock Text="WebView2 Runtime is required" FontSize="20" FontWeight="SemiBold"
+          <TextBlock x:Name="RuntimeErrorHeading" Text="WebView2 Runtime is required" FontSize="20" FontWeight="SemiBold"
                      Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" />
           <TextBlock x:Name="RuntimeErrorText" TextWrapping="Wrap" TextAlignment="Center"
                      FontSize="13" Margin="0,12,0,0" Foreground="{DynamicResource TextSecondary}"
@@ -274,7 +278,7 @@
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
             <Button Content="Get WebView2 Runtime" Style="{StaticResource AccentButton}"
                     Click="DownloadRuntime_Click" />
-            <Button Content="Retry" Style="{StaticResource DarkButton}" Margin="10,0,0,0"
+            <Button x:Name="RuntimeRetryButton" Content="Retry" Style="{StaticResource DarkButton}" Margin="10,0,0,0"
                     Click="RetryRuntime_Click" />
           </StackPanel>
         </StackPanel>

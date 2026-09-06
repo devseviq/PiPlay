@@ -1898,35 +1898,41 @@ public class WpfRuntimeTests : IDisposable
             {
                 WindowStartupLocation = WindowStartupLocation.Manual,
             };
-            var hwnd = new WindowInteropHelper(w).EnsureHandle();
+            try
+            {
+                var hwnd = new WindowInteropHelper(w).EnsureHandle();
 
-            // Floating start: the rounded region is on.
-            Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
-            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
-            Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
-            Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+                // Floating start: the rounded region is on.
+                Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
+                w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+                Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
 
-            // Place as the OS would snap a left half: work-area top-left, half width, full height.
-            var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
-            var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
-            Assert.True(GetMonitorInfo(monitor, ref info));
-            var halfWidth = (info.Work.Right - info.Work.Left) / 2;
-            var workHeight = info.Work.Bottom - info.Work.Top;
-            Assert.True(SetWindowPos(
-                hwnd, IntPtr.Zero, info.Work.Left, info.Work.Top, halfWidth, workHeight,
-                SwpNoZOrder | SwpNoActivate));
-            Assert.True(RoundedWindowRegionApplier.IsSnapLike(hwnd));
+                // Place as the OS would snap a left half: work-area top-left, half width, full height.
+                var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+                var info = new NativeMonitorInfo { Size = Marshal.SizeOf<NativeMonitorInfo>() };
+                Assert.True(GetMonitorInfo(monitor, ref info));
+                var halfWidth = (info.Work.Right - info.Work.Left) / 2;
+                var workHeight = info.Work.Bottom - info.Work.Top;
+                Assert.True(SetWindowPos(
+                    hwnd, IntPtr.Zero, info.Work.Left, info.Work.Top, halfWidth, workHeight,
+                    SwpNoZOrder | SwpNoActivate));
+                Assert.True(RoundedWindowRegionApplier.IsSnapLike(hwnd));
 
-            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
-            Assert.False(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
-            Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+                w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+                Assert.False(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+                Assert.True(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
 
-            // Floating restore reapplies the region (ADR: maximize/snap clears, floating reapplies).
-            Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
-            w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
-            Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
-            Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
-            w.Close();
+                // Floating restore reapplies the region (ADR: maximize/snap clears, floating reapplies).
+                Assert.True(SetWindowPos(hwnd, IntPtr.Zero, 80, 80, 480, 270, SwpNoZOrder | SwpNoActivate));
+                w.ApplyCornerAppearance(DwmCornerMode.Round, 22);
+                Assert.True(RoundedWindowRegionApplier.HasCustomRegionForTests(hwnd));
+                Assert.False(RoundedWindowRegionApplier.IsPointVisibleForTests(hwnd, 0, 0));
+            }
+            finally
+            {
+                w.Close();   // a failed assertion must not leave a native window behind for later tests
+            }
         });
 
     [StructLayout(LayoutKind.Sequential)]
@@ -2440,6 +2446,118 @@ public class WpfRuntimeTests : IDisposable
     });
 
     // --- Playlist context in the popout's return identity (spec 22.1: return preserves it) ---
+
+    // --- Return sample vs. identity (review 2026-09-05 PP-04 / PP-01 external retarget) ---
+
+    private static PlayerState SampleOfA() =>
+        new(CurrentTime: 42, Paused: false, Duration: 600, Volume: 0.5, Muted: false, PlaybackRate: 1.5);
+
+    [Fact]
+    public void Incoming_link_retarget_takes_only_video_targets_on_a_live_player() => StaTestThread.Invoke(() =>
+    {
+        var w = NewPlayer();
+
+        w.TrackReturnIdentity("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+        Assert.False(w.TryRetargetFromIncomingLink(new YouTubeTarget { PlaylistId = "PL0123456789", IsPlaylistOnly = true }));
+        Assert.Equal("dQw4w9WgXcQ", w.ReturnVideoIdForTests);
+
+        Assert.True(w.TryRetargetFromIncomingLink(new YouTubeTarget { VideoId = "BBBBBBBBBBB", StartSeconds = 30 }));
+        Assert.Equal("BBBBBBBBBBB", w.ReturnVideoIdForTests);
+        Assert.Equal("BBBBBBBBBBB", w.CurrentFallbackVideoIdForTests);
+        Assert.StartsWith("https://www.youtube.com/watch?v=BBBBBBBBBBB", w.CurrentUrlForTests);
+        Assert.Null(w.ReturnSecondsForTests);
+
+        w.Close();
+        Assert.True(w.IsClosingForTests);
+        Assert.False(w.TryRetargetFromIncomingLink(new YouTubeTarget { VideoId = "CCCCCCCCCCC" }));
+        Assert.Equal("BBBBBBBBBBB", w.ReturnVideoIdForTests);
+    });
+
+    [Fact]
+    public void A_sample_read_for_the_current_video_is_applied() => StaTestThread.Invoke(() =>
+    {
+        var w = NewPlayer();
+        var nav = w.NavigationGenerationForTests;
+        var identity = w.ReturnIdentityGenerationForTests;
+
+        Assert.True(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: true));
+
+        Assert.Equal(42, w.ReturnSecondsForTests);
+        Assert.False(w.ReturnPausedForTests);
+        Assert.Equal(0.5, w.ReturnVolumeForTests);
+        Assert.Equal(1.5, w.ReturnPlaybackRateForTests);
+    });
+
+    [Fact]
+    public void A_sample_that_finishes_after_an_incoming_retarget_never_reaches_the_new_video() => StaTestThread.Invoke(() =>
+    {
+        var w = NewPlayer();
+        var nav = w.NavigationGenerationForTests;
+        var identity = w.ReturnIdentityGenerationForTests;
+
+        Assert.True(w.TryRetargetFromIncomingLink(new YouTubeTarget { VideoId = "BBBBBBBBBBB" }));
+        Assert.False(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: true));
+
+        Assert.Equal("BBBBBBBBBBB", w.ReturnVideoIdForTests);
+        Assert.Null(w.ReturnSecondsForTests);
+        Assert.Null(w.ReturnPausedForTests);
+        Assert.Null(w.ReturnVolumeForTests);
+        Assert.Null(w.ReturnMutedForTests);
+        Assert.Null(w.ReturnPlaybackRateForTests);
+    });
+
+    [Fact]
+    public void A_sample_that_finishes_after_a_spa_identity_change_never_reaches_the_new_video() => StaTestThread.Invoke(() =>
+    {
+        var w = NewPlayer();
+        var nav = w.NavigationGenerationForTests;
+        var identity = w.ReturnIdentityGenerationForTests;
+        Assert.True(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: false));
+
+        // Autoplay advanced: no NavigationStarting, so the navigation generation is unchanged.
+        w.TrackReturnIdentity("https://www.youtube.com/watch?v=BBBBBBBBBBB");
+        Assert.Equal(nav, w.NavigationGenerationForTests);
+        Assert.NotEqual(identity, w.ReturnIdentityGenerationForTests);
+
+        // The old sample was dropped with the old identity, and a late old read cannot refill it.
+        Assert.Null(w.ReturnSecondsForTests);
+        Assert.Null(w.ReturnVolumeForTests);
+        Assert.False(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: true));
+        Assert.Equal("BBBBBBBBBBB", w.ReturnVideoIdForTests);
+        Assert.Null(w.ReturnSecondsForTests);
+        Assert.Null(w.ReturnPlaybackRateForTests);
+
+        // The same video reported again is not an identity change.
+        var after = w.ReturnIdentityGenerationForTests;
+        w.TrackReturnIdentity("https://www.youtube.com/watch?v=BBBBBBBBBBB&list=PL0123456789");
+        Assert.Equal(after, w.ReturnIdentityGenerationForTests);
+    });
+
+    [Fact]
+    public void A_failed_capture_and_polls_after_the_final_capture_change_nothing()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var w = NewPlayer();
+            var nav = w.NavigationGenerationForTests;
+            var identity = w.ReturnIdentityGenerationForTests;
+
+            Assert.False(w.TryApplyReturnPlaybackSampleForTests(null, nav, identity, isFinalCapture: true));
+            Assert.Null(w.ReturnSecondsForTests);
+
+            // Headless: no core, so the capture completes synchronously without a sample.
+            var returned = w.CaptureReturnStateNowAsync().GetAwaiter().GetResult();
+            Assert.Same(returned, w.CaptureReturnStateNowAsync().GetAwaiter().GetResult());
+            Assert.False(w.IsSyncTimerRunningForTests);
+
+            // A poll that was in flight when the snapshot froze must not reopen it...
+            Assert.False(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: false));
+            Assert.Null(w.ReturnSecondsForTests);
+            // ...while the final capture itself is the one write that may land on the frozen snapshot.
+            Assert.True(w.TryApplyReturnPlaybackSampleForTests(SampleOfA(), nav, identity, isFinalCapture: true));
+            Assert.Equal(42, w.ReturnSecondsForTests);
+        });
+    }
 
     [Fact]
     public void Popout_source_change_tracks_the_playlist_context() => StaTestThread.Invoke(() =>

@@ -1,9 +1,11 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using PiPlay;
 using PiPlay.Models;
+using PiPlay.Services;
 
 namespace PiPlay.Tests;
 
@@ -234,6 +236,289 @@ public class MainWindowLifecycleTests : IDisposable
             Assert.True(saveProfile.IsEnabled);
             Assert.True(editProfile.IsEnabled);
             Assert.True(deleteProfile.IsEnabled);
+        });
+    }
+
+    // --- Incoming links (REQ-APP-01, ADR-0009, review 2026-09-05 PP-01) ---
+
+    private const string LinkA = "https://www.youtube.com/watch?v=AAAAAAAAAAA";
+    private const string LinkB = "https://www.youtube.com/watch?v=BBBBBBBBBBB";
+    private const string LinkC = "https://youtu.be/CCCCCCCCCCC?t=42";
+    private const string PlaylistLink = "https://www.youtube.com/playlist?list=PL0123456789";
+
+    private static PlayerWindow NewHeadlessPlayer(string url = LinkA)
+    {
+        var player = new PlayerWindow(environment: null!, url: url, topmost: false, placement: null,
+            defaultWidth: 960, defaultHeight: 540, fadeEnabled: true);
+        player.TrackReturnIdentity(url);   // what the live page would have reported
+        return player;
+    }
+
+    [Fact]
+    public void Incoming_link_before_browser_readiness_is_queued_for_the_source()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+
+            window.NavigateTo(LinkA);
+
+            Assert.Equal(IncomingLinkAction.QueueUntilReady, window.AcceptIncomingLink(LinkA).Action);
+            Assert.Equal("https://www.youtube.com/watch?v=AAAAAAAAAAA", window.PendingUrlForTests);
+            Assert.Null(window.RetainedIncomingTargetForTests);
+        });
+    }
+
+    [Fact]
+    public void Incoming_link_with_a_ready_source_and_no_popout_navigates_the_source()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+
+            var decision = window.AcceptIncomingLink(LinkC);
+
+            Assert.Equal(IncomingLinkAction.NavigateSource, decision.Action);
+            // Headless: the Source has no core yet, so the navigation lands in the pending slot.
+            Assert.Equal("https://www.youtube.com/watch?v=CCCCCCCCCCC&t=42s", window.PendingUrlForTests);
+            Assert.Null(window.RetainedIncomingTargetForTests);
+        });
+    }
+
+    [Fact]
+    public void Incoming_video_link_retargets_the_active_popout_and_leaves_the_hidden_source_alone()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            var player = NewHeadlessPlayer();
+            window.AttachPlayerForTests(player);
+            window.SeedPopoutReturnForTests("AAAAAAAAAAA", sourceWasPlayingAtPopout: true);
+            window.ShowSourcePlaceholder(true);
+
+            var decision = window.ActivateFromSecondInstance(LinkB);
+
+            Assert.Equal(IncomingLinkAction.RetargetPopout, decision.Action);
+            Assert.True(decision.Accepted);
+            Assert.Equal("BBBBBBBBBBB", player.ReturnVideoIdForTests);
+            Assert.StartsWith("https://www.youtube.com/watch?v=BBBBBBBBBBB", player.CurrentUrlForTests);
+            Assert.Null(window.PendingUrlForTests);                      // Source stayed on A
+            Assert.Null(window.RetainedIncomingTargetForTests);
+            Assert.False(window.IsVisible);                              // the Popout is the visible owner
+            Assert.Single(Application.Current.Windows.OfType<PlayerWindow>());
+        });
+    }
+
+    [Fact]
+    public void Return_after_an_incoming_link_navigates_the_source_to_B_and_arms_auto_dedup()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            var player = NewHeadlessPlayer();
+            window.AttachPlayerForTests(player);
+            window.SeedPopoutReturnForTests("AAAAAAAAAAA", sourceWasPlayingAtPopout: true);
+            Assert.Equal(IncomingLinkAction.RetargetPopout, window.AcceptIncomingLink(LinkB).Action);
+
+            window.AttachPlayerForTests(null);   // the player closed and reported B
+            window.ApplyReturnActionAsync(new PlayerReturnState
+                {
+                    VideoId = "BBBBBBBBBBB",
+                    LastKnownSeconds = 42,
+                    Paused = false,
+                })
+                .GetAwaiter().GetResult();   // Navigate completes synchronously (no core to script)
+
+            Assert.StartsWith("https://www.youtube.com/watch?v=BBBBBBBBBBB", window.PendingUrlForTests);
+            Assert.Contains("t=42s", window.PendingUrlForTests);
+            Assert.Equal("BBBBBBBBBBB", window.AutoLastHandledVideoIdForTests);
+            Assert.NotNull(window.PendingReturnReplayForTests);
+        });
+    }
+
+    [Fact]
+    public void Links_arriving_during_return_are_retained_latest_wins_and_applied_when_it_completes()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            var urlBox = (TextBox)window.FindName("UrlBox")!;
+            window.SetBrowserReadyForTests(true);
+            window.BeginReturnForTests();   // also the state during an awaited return replay
+
+            Assert.Equal(IncomingLinkAction.Retain, window.AcceptIncomingLink(LinkA).Action);
+            Assert.Equal(IncomingLinkAction.Retain, window.AcceptIncomingLink(LinkB).Action);
+
+            Assert.Equal("BBBBBBBBBBB", window.RetainedIncomingTargetForTests!.VideoId);
+            Assert.Null(window.PendingUrlForTests);
+            Assert.Contains("BBBBBBBBBBB", urlBox.Text);   // pending status
+
+            window.CompleteReturnForTests();
+
+            Assert.Null(window.RetainedIncomingTargetForTests);
+            Assert.Equal("https://www.youtube.com/watch?v=BBBBBBBBBBB", window.PendingUrlForTests);
+        });
+    }
+
+    [Fact]
+    public void Links_arriving_during_clear_are_retained_and_applied_when_the_clear_finishes()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            window.SetClearingBrowserDataForTests(true);
+
+            Assert.Equal(IncomingLinkAction.Retain, window.AcceptIncomingLink(LinkC).Action);
+            Assert.Null(window.PendingUrlForTests);
+
+            // Still clearing: applying re-retains instead of navigating underneath the clear.
+            window.ApplyRetainedIncomingLinkForTests();
+            Assert.Equal("CCCCCCCCCCC", window.RetainedIncomingTargetForTests!.VideoId);
+
+            window.SetClearingBrowserDataForTests(false);
+            window.ApplyRetainedIncomingLinkForTests();
+
+            Assert.Null(window.RetainedIncomingTargetForTests);
+            Assert.Equal("https://www.youtube.com/watch?v=CCCCCCCCCCC&t=42s", window.PendingUrlForTests);
+        });
+    }
+
+    [Fact]
+    public void Playlist_link_during_an_active_popout_waits_with_a_visible_note_until_return()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            var note = (TextBlock)window.FindName("PlaceholderNoteText")!;
+            window.SetBrowserReadyForTests(true);
+            var player = NewHeadlessPlayer();
+            window.AttachPlayerForTests(player);
+            window.ShowSourcePlaceholder(true);
+
+            var decision = window.ActivateFromSecondInstance(PlaylistLink);
+
+            Assert.Equal(IncomingLinkAction.Retain, decision.Action);
+            Assert.Equal("PL0123456789", window.RetainedIncomingTargetForTests!.PlaylistId);
+            Assert.Equal("AAAAAAAAAAA", player.ReturnVideoIdForTests);   // Popout untouched
+            Assert.Null(window.PendingUrlForTests);                      // hidden Source untouched
+            Assert.Equal(Visibility.Visible, note.Visibility);
+            Assert.Equal(MainWindow.PendingIncomingLinkNote, note.Text);
+
+            // Bring video back: the Source owns playback again and takes the playlist.
+            window.AttachPlayerForTests(null);
+            window.BeginReturnForTests();
+            window.ShowSourcePlaceholder(false);
+            window.CompleteReturnForTests();
+
+            Assert.Null(window.RetainedIncomingTargetForTests);
+            Assert.Equal("https://www.youtube.com/playlist?list=PL0123456789", window.PendingUrlForTests);
+        });
+    }
+
+    [Fact]
+    public void A_link_retained_while_bringing_video_back_is_applied_when_the_return_finishes_synchronously()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            var player = NewHeadlessPlayer();
+            window.AttachPlayerWithReturnForTests(player);
+
+            // The link lands after Bring video back started (the policy sees PopoutInProgress).
+            window.SetPopoutInProgressForTests(true);
+            Assert.Equal(IncomingLinkAction.Retain, window.AcceptIncomingLink(LinkB).Action);
+            Assert.Equal("BBBBBBBBBBB", window.RetainedIncomingTargetForTests!.VideoId);
+            window.SetPopoutInProgressForTests(false);
+
+            // Headless: the capture and the return complete synchronously, so the return
+            // transition runs INSIDE BringVideoBackAsync while _popoutInProgress is still set.
+            window.BringVideoBackForTestsAsync().GetAwaiter().GetResult();
+
+            Assert.Null(window.RetainedIncomingTargetForTests);
+            Assert.Equal(LinkB, window.PendingUrlForTests);
+            Assert.False(window.IncomingLinkStateForTests.PopoutInProgress);
+            Assert.False(window.IncomingLinkStateForTests.ReturnInProgress);
+        });
+    }
+
+    [Fact]
+    public void A_closing_source_answers_unavailable_and_does_not_come_forward()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            window.SetMainWindowClosingForTests(true);
+
+            var decision = window.ActivateFromSecondInstance(LinkA);
+
+            Assert.Equal(IncomingLinkAction.Unavailable, decision.Action);
+            Assert.False(decision.Accepted);
+            // App.OnExit has not run yet, so the process-wide flag is still false; the window's
+            // own state must be enough for the sender to elect a replacement.
+            Assert.Equal(HandoffAck.Unavailable, SingleInstanceHandoffPolicy.AckFor(decision, shuttingDown: false));
+            Assert.False(window.IsVisible);
+            Assert.Null(window.PendingUrlForTests);
+            Assert.Null(window.RetainedIncomingTargetForTests);
+        });
+    }
+
+    [Theory]
+    [InlineData(null, IncomingLinkAction.ActivateOnly, true)]
+    [InlineData("", IncomingLinkAction.ActivateOnly, true)]
+    [InlineData("https://example.com/watch?v=dQw4w9WgXcQ", IncomingLinkAction.Reject, false)]
+    [InlineData("%E2%82%", IncomingLinkAction.Reject, false)]
+    public void Activation_without_a_usable_link_still_brings_the_source_forward(
+        string? payload, IncomingLinkAction expected, bool accepted)
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow { ShowActivated = false, ShowInTaskbar = false };
+            window.SetBrowserReadyForTests(true);
+
+            var decision = window.ActivateFromSecondInstance(payload);
+
+            Assert.Equal(expected, decision.Action);
+            Assert.Equal(accepted, decision.Accepted);
+            Assert.True(window.IsVisible);
+            Assert.Null(window.PendingUrlForTests);
+            Assert.Null(window.RetainedIncomingTargetForTests);
+        });
+    }
+
+    [Fact]
+    public void A_refused_settings_save_shows_the_title_bar_hint_once_without_a_modal()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "PiPlayTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "settings.json");
+            File.WriteAllText(path, "{\"schemaVersion\":3}");
+            try
+            {
+                var unreadable = new SettingsService(path, _ => throw new IOException("locked"));
+                unreadable.Load();
+                var window = new MainWindow();
+                window.ReplaceSettingsServiceForTests(unreadable);
+                Assert.False(window.IsSettingsUnsavedHintVisibleForTests);
+
+                window.SaveSettingsForTests();
+                Assert.True(window.IsSettingsUnsavedHintVisibleForTests);
+                window.SaveSettingsForTests();   // no second signal; the hint stays
+                Assert.True(window.IsSettingsUnsavedHintVisibleForTests);
+                Assert.Equal("{\"schemaVersion\":3}", File.ReadAllText(path));
+            }
+            finally
+            {
+                new SettingsService(path).Load();   // lift the process-wide unread flag for later tests
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            }
         });
     }
 

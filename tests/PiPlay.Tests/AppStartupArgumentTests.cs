@@ -44,6 +44,25 @@ public class AppStartupArgumentTests
         Assert.Null(App.ExtractUrlArg(new[] { arg }));
     }
 
+    [Theory]
+    [InlineData("%")]
+    [InlineData("%E2%82%")]
+    [InlineData("https://www.youtube.com/watch?v=%")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ%")]
+    public void Malformed_escapes_never_throw_out_of_startup_argument_parsing(string arg)
+    {
+        Assert.Null(Record.Exception(() => Assert.Null(App.ExtractUrlArg(new[] { arg }))));
+    }
+
+    [Theory]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=%zz")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=99999999999999999999s")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=%E2%82")]
+    public void A_valid_video_with_a_malformed_offset_or_list_is_still_handed_off_verbatim(string arg)
+    {
+        Assert.Equal(arg, App.ExtractUrlArg(new[] { arg }));
+    }
+
     [Fact]
     public void A_bare_video_id_is_a_launch_url_like_it_is_in_the_address_bar()
     {

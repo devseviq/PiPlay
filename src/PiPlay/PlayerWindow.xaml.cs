@@ -69,7 +69,15 @@ public partial class PlayerWindow : Window
 
     private bool _navCompleted;
     private int _navigationGeneration;
+    // PP-04: bumped whenever the RETURN identity changes (retarget, SPA advance) so a playback
+    // sample read for one video can never be paired with the next one's id. Navigation
+    // generations alone miss SPA identity changes, which raise no NavigationStarting.
+    private int _returnIdentityGeneration;
     private int _playerInitializationGeneration;
+    // PP-02: one page reload per renderer exit, bounded; a browser-process exit closes the Popout.
+    private bool _processRecoveryInProgress;
+    private int _consecutiveProcessRecoveries;
+    private DateTimeOffset? _lastProcessFailureUtc;
     private ulong? _activeNavigationId;
     private bool _syncTickInProgress;
     private bool _closing;
@@ -250,6 +258,7 @@ public partial class PlayerWindow : Window
             core.NewWindowRequested += Core_NewWindowRequested;
             core.NavigationCompleted += Core_NavigationCompleted;
             core.SourceChanged += Core_SourceChanged;
+            core.ProcessFailed += Core_ProcessFailed;
             // Secondary expand route (overhaul Task 4): the compact shell's YouTube fullscreen
             // button raises a fullscreen ELEMENT that today fills only the WebView bounds the
             // player already fills — honor it as window expansion. The handler gates on the LIVE
@@ -335,6 +344,60 @@ public partial class PlayerWindow : Window
         }
     }
 
+    // --- WebView2 process failure (spec 15.4, PP-02) ---
+
+    private void Core_ProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
+    {
+        Log.Warn($"Popout WebView2 process failure: {e.ProcessFailedKind} ({e.Reason}, exit {e.ExitCode}, {e.ProcessDescription}).");
+        HandleProcessFailure(WebViewProcessFailurePolicy.Classify(e.ProcessFailedKind));
+    }
+
+    /// <summary>
+    /// Scoped cut of PP-02 for the Popout: a renderer exit reloads the page in place (bounded, one
+    /// at a time); a browser-process exit has no core to recreate against, so the Popout closes and
+    /// returns with its last polled sample while the Source recreates its own control. Internal for
+    /// the WPF test lane.
+    /// </summary>
+    internal WebViewRecoveryAction HandleProcessFailure(WebViewFailureKind kind, DateTimeOffset? now = null)
+    {
+        var at = now ?? DateTimeOffset.UtcNow;
+        var count = WebViewProcessFailurePolicy.ConsecutiveCountFor(_consecutiveProcessRecoveries, _lastProcessFailureUtc, at);
+        var action = WebViewProcessFailurePolicy.Decide(
+            kind, count, _processRecoveryInProgress ? WebViewRecoveryAction.Reload : null, _closing);
+        Log.Info($"Popout browser failure {kind}: {action} (consecutive recoveries: {count}).");
+        if (action is WebViewRecoveryAction.Ignore or WebViewRecoveryAction.LogOnly) return action;
+
+        _lastProcessFailureUtc = at;
+        _consecutiveProcessRecoveries = count;
+        switch (action)
+        {
+            case WebViewRecoveryAction.Reload:
+                _consecutiveProcessRecoveries++;
+                _processRecoveryInProgress = true;
+                ShowShellError(WebViewProcessFailurePolicy.PopoutReloadMessage);
+                try { Player.CoreWebView2?.Reload(); }
+                catch (Exception ex)
+                {
+                    _processRecoveryInProgress = false;
+                    Log.Error("Popout reload after renderer exit failed; closing the Popout.", ex);
+                    Close();
+                }
+                break;
+            case WebViewRecoveryAction.Recreate:
+            case WebViewRecoveryAction.GiveUp:
+                // Playback goes back to the Source with the last polled sample (the final capture
+                // cannot run against a dead core; the PP-04 gate keeps the last poll intact). The
+                // stamp tells the Source its own core is dead before it acts on the return.
+                _processRecoveryInProgress = false;
+                _returnState.BrowserProcessFailed = true;
+                Log.Info("Popout Player closing after a browser-process failure; playback returns to the Source Window.");
+                Close();
+                break;
+        }
+
+        return action;
+    }
+
     // --- Navigation policy: YouTube only (REQ-NAV-02) ---
 
     private void Core_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
@@ -373,6 +436,20 @@ public partial class PlayerWindow : Window
     }
 
     /// <summary>
+    /// The incoming-link route (REQ-APP-01, ADR-0009): a supported VIDEO target delivered from
+    /// outside retargets the Popout that owns playback. Narrow by design — playlist-only targets
+    /// have no playable item here, and a closing player is already handing playback back, so the
+    /// caller retains the link for the Source instead.
+    /// </summary>
+    internal bool TryRetargetFromIncomingLink(YouTubeTarget target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        if (_closing || string.IsNullOrEmpty(target.VideoId)) return false;
+        RetargetTo(target);
+        return true;
+    }
+
+    /// <summary>
     /// Move this player to a new target in place, in its CURRENT mode (compact shell rebuild or
     /// normal watch URL). All launch-time state that the navigation invalidates follows: the
     /// fallback target (the error bar must reopen the NEW video), the return video id, the
@@ -384,6 +461,7 @@ public partial class PlayerWindow : Window
         _currentTarget = target;
         _returnState.VideoId = target.VideoId;
         _returnState.PlaylistId = target.PlaylistId;
+        _returnIdentityGeneration++;
         ResetReturnMediaStateForNewTarget();
         _nudgedPlay = false;
         _finalReturnPlaybackCaptured = false;
@@ -424,6 +502,14 @@ public partial class PlayerWindow : Window
     {
         if (YouTubeUrlHelper.TryParse(source, out var t) && t.VideoId is not null)
         {
+            if (!string.Equals(_returnState.VideoId, t.VideoId, StringComparison.Ordinal))
+            {
+                // A different video is playing now: the last sample belonged to the previous one.
+                // Unknown time for the new video is correct until its own poll lands (PP-04).
+                _returnIdentityGeneration++;
+                ResetReturnMediaStateForNewTarget();
+            }
+
             _returnState.VideoId = t.VideoId;
             // Follows the video, including to null: a video OUTSIDE the list (recommendation
             // click) must not return wearing the stale playlist context.
@@ -439,9 +525,22 @@ public partial class PlayerWindow : Window
         if (_activeNavigationId != e.NavigationId ||
             !CompleteNavigation(_navigationGeneration, e.IsSuccess)) return;
 
+        OnNavigationSettled(e.IsSuccess);
+    }
+
+    /// <summary>What a completed, current navigation means for the recovery notice and the shell.</summary>
+    private void OnNavigationSettled(bool isSuccess)
+    {
+        if (_processRecoveryInProgress)
+        {
+            // The reload after a renderer exit landed (or failed visibly through the error page).
+            _processRecoveryInProgress = false;
+            if (isSuccess) HideShellError();
+        }
+
         // A compact shell that failed to load outright can never message the host — surface the
         // error bar now instead of waiting out the watchdog (spec 10.3 / Q-6, Stage 4).
-        if (_mode == PlaybackMode.Compact && !e.IsSuccess)
+        if (_mode == PlaybackMode.Compact && !isSuccess)
         {
             _shellReadyTimer.Stop();
             ShowShellError(PlayerShellErrorPolicy.ShellLoadFailedMessage);
@@ -501,15 +600,25 @@ public partial class PlayerWindow : Window
     {
         if (_mode != PlaybackMode.Compact) return;
         _shellReadyTimer.Stop();
-        // Compact mode's source of truth for the return timestamp is the IFrame API, not the DOM.
-        _returnState.LastKnownSeconds = state.CurrentTime;
-        // Compact shell protocol does not currently report paused/volume/mute/rate; normal mode
-        // captures those from the DOM bridge.
         // Protocol v3: the shell reports the CURRENT video (playlist auto-advance and in-iframe
         // clicks are invisible to the host). PlayerShellProtocol.Parse already rejected malformed
         // ids at the wire (the parse IS the trust boundary), so a non-empty value here is a
-        // well-formed id; absent/invalid keeps the last-known id.
-        if (!string.IsNullOrEmpty(state.VideoId)) _returnState.VideoId = state.VideoId;
+        // well-formed id; absent/invalid keeps the last-known id. An id change is an identity
+        // change like a Source-navigation one: the previous sample and any in-flight capture
+        // belong to the old video (PP-04), so the generation moves before this sample lands.
+        if (!string.IsNullOrEmpty(state.VideoId) &&
+            !string.Equals(_returnState.VideoId, state.VideoId, StringComparison.Ordinal))
+        {
+            _returnIdentityGeneration++;
+            ResetReturnMediaStateForNewTarget();
+            _returnState.VideoId = state.VideoId;
+        }
+
+        // Compact mode's source of truth for the return timestamp is the IFrame API, not the DOM.
+        // The time rides with the id in the same message, so it pairs with the video just set.
+        _returnState.LastKnownSeconds = state.CurrentTime;
+        // Compact shell protocol does not currently report paused/volume/mute/rate; normal mode
+        // captures those from the DOM bridge.
         // A playing state proves recovery (e.g. a playlist auto-advanced past a dead entry) —
         // clear a showing error so the bar can't outlive the problem it reported.
         if (PlayerShellErrorPolicy.ShouldAutoDismiss(state.PlayerState)) HideShellError();
@@ -625,9 +734,10 @@ public partial class PlayerWindow : Window
     {
         ErrorText.Text = message;
         ErrorBar.Visibility = Visibility.Visible;
-        // Redacted target only (spec 17): never the full query string.
-        Log.Info($"Compact player error shown (\"{message}\") for {Log.RedactUrl(_currentUrl)}; " +
-                 "normal-page fallback offered.");
+        // Redacted target only (spec 17): never the full query string. The bar always carries
+        // "Open normal page"; in normal mode that reopens the current video as the normal page.
+        Log.Info($"Popout notice shown (\"{message}\") for {Log.RedactUrl(_currentUrl)} in {_mode} mode; " +
+                 "Open normal page offered.");
     }
 
     private void HideShellError()
@@ -682,6 +792,10 @@ public partial class PlayerWindow : Window
     internal void HandleShellRequestForTests(InboundShellMessage message) => ShellBridge_RequestReceived(this, message);
     internal void HandleFocusedActionForTests(string action) => HandleWindowAction(action);
     internal bool IsErrorBarVisibleForTests => ErrorBar.Visibility == Visibility.Visible;
+    internal bool IsProcessRecoveryInProgressForTests => _processRecoveryInProgress;
+    internal void SettleNavigationForTests(bool succeeded) => OnNavigationSettled(succeeded);
+    internal bool ReturnBrowserProcessFailedForTests => _returnState.BrowserProcessFailed;
+    internal int ConsecutiveProcessRecoveriesForTests => _consecutiveProcessRecoveries;
     internal string ErrorTextForTests => ErrorText.Text;
 
     // Retarget / return-state seams (overhaul Task 3, WPF lane).
@@ -728,6 +842,7 @@ public partial class PlayerWindow : Window
         // but they have no video state to read. Keep the cheap URL-shape check outside WebView IPC.
         if (core is null || !YouTubeUrlHelper.IsWatchUrl(core.Source)
             || !TryBeginSyncPoll(out var generation)) return;
+        var identityGeneration = _returnIdentityGeneration;
 
         try
         {
@@ -744,7 +859,7 @@ public partial class PlayerWindow : Window
                 if (!IsSyncPollCurrent(generation) || _finalReturnPlaybackCaptured) return;
             }
 
-            ApplyReturnPlaybackState(state);
+            TryApplyReturnPlaybackSample(state, generation, identityGeneration, isFinalCapture: false);
         }
         finally
         {
@@ -764,9 +879,36 @@ public partial class PlayerWindow : Window
     private async Task CaptureCurrentPlaybackStateAsync()
     {
         if (!PlaybackModePolicy.UsesDomSyncTimer(_mode) || Player.CoreWebView2 is null) return;
+        var navigationGeneration = _navigationGeneration;
+        var identityGeneration = _returnIdentityGeneration;
         var state = await YouTubeDomBridge.ReadPlayerStateAsync(Player.CoreWebView2);
-        if (state is not null) ApplyReturnPlaybackState(state);
+        // A retarget or SPA advance during the read already reset the media fields for the new
+        // video; a stale sample must not refill them (PP-04). Unknown time is the honest answer.
+        TryApplyReturnPlaybackSample(state, navigationGeneration, identityGeneration, isFinalCapture: true);
     }
+
+    /// <summary>
+    /// The one gate between a DOM sample and the return snapshot: the sample is applied only if it
+    /// was read for the navigation AND the return identity that are still current. Polled samples
+    /// additionally stop once the final capture froze the snapshot.
+    /// </summary>
+    private bool TryApplyReturnPlaybackSample(
+        PlayerState? state, int navigationGeneration, int identityGeneration, bool isFinalCapture)
+    {
+        if (state is null || _closing) return false;
+        if (!isFinalCapture && _finalReturnPlaybackCaptured) return false;
+        if (navigationGeneration != _navigationGeneration
+            || identityGeneration != _returnIdentityGeneration) return false;
+
+        ApplyReturnPlaybackState(state);
+        return true;
+    }
+
+    internal int ReturnIdentityGenerationForTests => _returnIdentityGeneration;
+    internal int NavigationGenerationForTests => _navigationGeneration;
+    internal bool TryApplyReturnPlaybackSampleForTests(
+        PlayerState? state, int navigationGeneration, int identityGeneration, bool isFinalCapture) =>
+        TryApplyReturnPlaybackSample(state, navigationGeneration, identityGeneration, isFinalCapture);
 
     private void ApplyReturnPlaybackState(PlayerState state)
     {
