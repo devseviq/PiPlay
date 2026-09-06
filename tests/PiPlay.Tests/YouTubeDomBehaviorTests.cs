@@ -75,4 +75,47 @@ public class YouTubeDomBehaviorTests
             $"Node DOM behavior harness exited with code {process.ExitCode}.{Environment.NewLine}{diagnostics}");
         Assert.Contains("DOM HARNESS PASS", output, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Ad_state_classification_maps_explicit_clear_and_ad_results()
+    {
+        Assert.Equal(YouTubeAdState.Clear,
+            await YouTubeDomBridge.ReadAdStateAsync(_ => Task.FromResult("\"clear\"")));
+        Assert.Equal(YouTubeAdState.Ad,
+            await YouTubeDomBridge.ReadAdStateAsync(_ => Task.FromResult("\"ad\"")));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("null")]
+    [InlineData("\"unknown\"")]
+    [InlineData("{not json")]
+    public async Task Ad_state_classification_fails_closed_on_unknown_results(string? scriptResult)
+    {
+        Assert.Equal(YouTubeAdState.Unknown,
+            await YouTubeDomBridge.ReadAdStateAsync(_ => Task.FromResult(scriptResult!)));
+    }
+
+    [Fact]
+    public async Task Ad_state_classification_reports_unknown_when_the_script_executor_throws()
+    {
+        var state = await YouTubeDomBridge.ReadAdStateAsync(
+            _ => Task.FromException<string>(new InvalidOperationException("renderer unavailable")));
+
+        Assert.Equal(YouTubeAdState.Unknown, state);
+    }
+
+    [Fact]
+    public async Task Ad_state_classification_reports_unknown_when_the_script_executor_never_completes()
+    {
+        var neverCompletes = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var state = await YouTubeDomBridge.ReadAdStateAsync(
+                _ => neverCompletes.Task, TimeSpan.FromMilliseconds(25))
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(YouTubeAdState.Unknown, state);
+    }
 }

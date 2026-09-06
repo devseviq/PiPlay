@@ -166,10 +166,22 @@ class FakeElement extends EventHub {
     for (const child of this.children) child.connect();
   }
 
+  disconnect() {
+    this._connected = false;
+    for (const child of this.children) child.disconnect();
+  }
+
   appendChild(child) {
     child.parentNode = this;
     this.children.push(child);
     if (this.isConnected) child.connect();
+    return child;
+  }
+
+  removeChild(child) {
+    this.children = this.children.filter(candidate => candidate !== child);
+    child.parentNode = null;
+    child.disconnect();
     return child;
   }
 
@@ -254,6 +266,8 @@ class FakeMediaElement extends FakeElement {
     this.duration = 120;
     this._currentTime = 12;
     this.currentTimeWrites = 0;
+    this._playbackRate = 1;
+    this.playbackRateWrites = 0;
     this.playCount = 0;
     this.pauseCount = 0;
   }
@@ -265,6 +279,15 @@ class FakeMediaElement extends FakeElement {
   set currentTime(value) {
     this.currentTimeWrites++;
     this._currentTime = Number(value);
+  }
+
+  get playbackRate() {
+    return this._playbackRate;
+  }
+
+  set playbackRate(value) {
+    this.playbackRateWrites++;
+    this._playbackRate = Number(value);
   }
 
   play() {
@@ -354,7 +377,8 @@ class FakeDocument extends EventHub {
   }
 
   querySelector(selector) {
-    if (selector === "#movie_player,.html5-video-player") return this.player;
+    if (selector === "#movie_player,.html5-video-player")
+      return this.player && this.player.isConnected ? this.player : null;
     if (selector === "#movie_player video.html5-main-video,video.html5-main-video,video") return this.media;
     if (selector === ".ytp-subtitles-button") return this.nativeCaptions;
     if (selector === ".ytp-next-button") return this.nativeNext;
@@ -502,6 +526,23 @@ function authorizeFocused(environment) {
     "Focused document authorization script must return true");
   equal(execute(environment, input.focusedStateRequestScript), true,
     "Focused state request script must return true");
+}
+
+function adPostures() {
+  const stale = createEnvironment();
+  stale.document.documentElement.removeChild(stale.document.body);
+
+  const missingPlayer = createEnvironment({ includePlayer: false });
+  missingPlayer.document.media = new FakeMediaElement();
+  missingPlayer.document.body.appendChild(missingPlayer.document.media);
+
+  return [
+    { name: "clear", environment: createEnvironment(), probe: "clear", seeks: true, videoReachable: true },
+    { name: "ad-showing", environment: createEnvironment({ adClass: "ad-showing" }), probe: "ad", seeks: false, videoReachable: true },
+    { name: "ad-interrupting", environment: createEnvironment({ adClass: "ad-interrupting" }), probe: "ad", seeks: false, videoReachable: true },
+    { name: "missing player", environment: missingPlayer, probe: "unknown", seeks: false, videoReachable: true },
+    { name: "stale document", environment: stale, probe: "unknown", seeks: false, videoReachable: false },
+  ];
 }
 
 scenario("passive drag preserves clicks until one trusted threshold crossing", () => {
@@ -735,6 +776,70 @@ scenario("Focused selector failure withdraws harmlessly and reports inactive", (
   equal(message.active, false, "selector failure must report inactive");
   equal([...environment.timers.values()].filter(timer => timer.interval).length, 0,
     "selector failure must not leave the active fallback interval running");
+});
+
+scenario("ad-state probe classifies clear, both ad classes, missing player, and stale documents", () => {
+  for (const posture of adPostures()) {
+    equal(execute(posture.environment, input.adStateProbeScript), posture.probe,
+      `${posture.name} must probe as ${posture.probe}`);
+  }
+});
+
+scenario("host seek writer applies currentTime only in the clear posture", () => {
+  for (const posture of adPostures()) {
+    const media = posture.environment.document.media;
+    const initialTime = media.currentTime;
+    execute(posture.environment, input.seekScript);
+    equal(media.currentTimeWrites, posture.seeks ? 1 : 0,
+      `${posture.name} seek currentTime writes`);
+    equal(media.currentTime, posture.seeks ? 95 : initialTime,
+      `${posture.name} seek final position`);
+  }
+});
+
+scenario("host seek-and-pause always pauses but applies currentTime only when clear", () => {
+  for (const posture of adPostures()) {
+    const media = posture.environment.document.media;
+    const initialTime = media.currentTime;
+    execute(posture.environment, input.seekAndPauseScript);
+    equal(media.currentTimeWrites, posture.seeks ? 1 : 0,
+      `${posture.name} seek-and-pause currentTime writes`);
+    equal(media.currentTime, posture.seeks ? 95 : initialTime,
+      `${posture.name} seek-and-pause final position`);
+    equal(media.pauseCount, posture.videoReachable ? 1 : 0,
+      `${posture.name} seek-and-pause must pause every reachable video`);
+  }
+});
+
+scenario("host seek-and-play always plays but applies currentTime only when clear", () => {
+  for (const posture of adPostures()) {
+    const media = posture.environment.document.media;
+    const initialTime = media.currentTime;
+    execute(posture.environment, input.seekAndPlayScript);
+    equal(media.currentTimeWrites, posture.seeks ? 1 : 0,
+      `${posture.name} seek-and-play currentTime writes`);
+    equal(media.currentTime, posture.seeks ? 95 : initialTime,
+      `${posture.name} seek-and-play final position`);
+    equal(media.playCount, posture.videoReachable ? 1 : 0,
+      `${posture.name} seek-and-play must play every reachable video`);
+    equal(media.paused, !posture.videoReachable,
+      `${posture.name} seek-and-play playing state`);
+  }
+});
+
+scenario("host playback settings always set volume and mute but playbackRate only when clear", () => {
+  for (const posture of adPostures()) {
+    const media = posture.environment.document.media;
+    execute(posture.environment, input.playbackSettingsScript);
+    equal(media.volume, posture.videoReachable ? 0.4 : 1,
+      `${posture.name} playback-settings volume`);
+    equal(media.muted, posture.videoReachable,
+      `${posture.name} playback-settings mute`);
+    equal(media.playbackRateWrites, posture.seeks ? 1 : 0,
+      `${posture.name} playback-settings playbackRate writes`);
+    equal(media.playbackRate, posture.seeks ? 1.75 : 1,
+      `${posture.name} playback-settings final playbackRate`);
+  }
 });
 
 if (failures.length) {

@@ -50,7 +50,6 @@ public static class YouTubeDomBridge
   const adState = !adPlayer ? 'unknown'
     : (adPlayer.classList.contains('{AdShowingClass}') || adPlayer.classList.contains('{AdInterruptingClass}')) ? 'ad' : 'clear';";
 
-
     private static readonly string ReadStateScript = $@"
 (() => {{
   const v = {VideoSelector};
@@ -230,7 +229,7 @@ public static class YouTubeDomBridge
 (() => {{
   {AdStateGuardScript}
   const v = {VideoSelector};
-  if (v && adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+  if (v && adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
 }})()";
 
     public static Task SeekAndPauseAsync(CoreWebView2 webView, int seconds) =>
@@ -241,7 +240,7 @@ public static class YouTubeDomBridge
   {AdStateGuardScript}
   const v = {VideoSelector};
   if (!v) return;
-  if (adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+  if (adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
   v.pause();
 }})()";
 
@@ -253,7 +252,7 @@ public static class YouTubeDomBridge
   {AdStateGuardScript}
   const v = {VideoSelector};
   if (!v) return;
-  if (adState === 'clear') {{ try {{ v.currentTime = {seconds}; }} catch (e) {{}} }}
+  if (adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
   const p = v.play(); if (p && p.catch) p.catch(() => {{}});
 }})()";
 
