@@ -56,6 +56,20 @@ public class ReturnPolicyTests
         Assert.Equal(expected, ReturnPolicy.Decide(lastKnownSeconds, wasPlaying, returnedId, sourceId));
     }
 
+    // PP-01: the decision is re-checked against the video the Source is actually showing.
+    [Theory]
+    [InlineData(ReturnAction.SeekAndPlay, "videoA00001", "videoA00001", "videoA00001", ReturnAction.SeekAndPlay)] // unchanged
+    [InlineData(ReturnAction.Seek, "videoA00001", "videoA00001", null, ReturnAction.Seek)]                       // live unknown
+    [InlineData(ReturnAction.Seek, "videoA00001", null, "videoB00001", ReturnAction.Seek)]                       // launch unknown
+    [InlineData(ReturnAction.Seek, "videoA00001", "videoA00001", "videoB00001", ReturnAction.Navigate)]          // Source moved
+    [InlineData(ReturnAction.Play, "", "videoA00001", "videoB00001", ReturnAction.None)]                         // moved, returned unknown
+    [InlineData(ReturnAction.Navigate, "videoC00001", "videoA00001", "videoB00001", ReturnAction.Navigate)]      // already navigating
+    public void Live_source_identity_overrides_a_same_video_decision_when_the_source_moved(
+        ReturnAction action, string? returnedId, string? launchId, string? liveId, ReturnAction expected)
+    {
+        Assert.Equal(expected, ReturnPolicy.ReconcileWithLiveSource(action, returnedId, launchId, liveId));
+    }
+
     [Fact]
     public void Same_video_with_returned_paused_state_uses_the_popout_state()
     {

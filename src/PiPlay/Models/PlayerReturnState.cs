@@ -37,6 +37,13 @@ public sealed class PlayerReturnState
     /// </summary>
     public string? PlaylistId { get; set; }
 
+    /// <summary>
+    /// The Popout closed because the shared browser process died (PP-02). Both windows share one
+    /// environment, so the Source's core is dead too; the Source must recover before it acts on
+    /// this state, whichever window's failure notification arrived first.
+    /// </summary>
+    public bool BrowserProcessFailed { get; set; }
+
     public bool Topmost { get; set; }
 
     /// <summary>Whether controls fade was enabled when the player closed (persisted for next popout).</summary>

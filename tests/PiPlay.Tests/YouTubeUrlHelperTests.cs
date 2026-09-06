@@ -56,6 +56,48 @@ public class YouTubeUrlHelperTests
         Assert.DoesNotContain("list", YouTubeUrlHelper.BuildWatchUrl(t));
     }
 
+    // Malformed percent-escapes and absurd offsets (review 2026-09-05, PP-01 evidence table): the
+    // parser must decide, never throw, so a hostile or mangled command-line/pipe payload cannot take
+    // startup or the hand-off down with it.
+    [Theory]
+    [InlineData("%")]
+    [InlineData("%zz")]
+    [InlineData("abc%")]
+    [InlineData("%E2%82")]
+    [InlineData("%E2%82%")]
+    [InlineData("https://www.youtube.com/watch?v=%")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ%")]
+    public void Malformed_inputs_are_rejected_without_throwing(string input)
+    {
+        var threw = Record.Exception(() => Assert.False(YouTubeUrlHelper.TryParse(input, out _)));
+        Assert.Null(threw);
+    }
+
+    [Theory]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=%zz")]
+    [InlineData("https://youtu.be/dQw4w9WgXcQ?t=%")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=%E2%82%s")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=99999999999999999999s")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=9999999999h")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=-5")]
+    [InlineData("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1e9")]
+    public void Malformed_or_overflowing_offsets_keep_the_video_and_drop_the_timestamp(string input)
+    {
+        Assert.True(YouTubeUrlHelper.TryParse(input, out var t));
+        Assert.Equal("dQw4w9WgXcQ", t.VideoId);
+        Assert.Null(t.StartSeconds);
+    }
+
+    [Fact]
+    public void Malformed_list_escape_keeps_the_video_and_reports_the_dropped_list()
+    {
+        Assert.True(YouTubeUrlHelper.TryParse(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=%E2%82", out var t));
+        Assert.Equal("dQw4w9WgXcQ", t.VideoId);
+        Assert.Null(t.PlaylistId);
+        Assert.False(string.IsNullOrEmpty(t.FallbackReason));
+    }
+
     [Fact]
     public void Mix_radio_list_is_kept_and_carried_to_the_watch_url()
     {

@@ -66,6 +66,23 @@ public static class ReturnPolicy
     }
 
     /// <summary>
+    /// Second look at a decision against the page the Source is ACTUALLY showing (PP-01). The launch
+    /// identity is what the Popout was compared against; if the Source has since moved to another
+    /// video (a navigation the ownership gate did not stop), a same-video seek would drive the wrong
+    /// page. A known returned video navigates there; an unknown one cannot be seeked safely, so
+    /// nothing is driven. Unknown live/launch identity keeps the original decision.
+    /// </summary>
+    public static ReturnAction ReconcileWithLiveSource(
+        ReturnAction action, string? returnedVideoId, string? sourceVideoIdAtPopout, string? liveSourceVideoId)
+    {
+        if (action == ReturnAction.Navigate) return action;
+        if (string.IsNullOrEmpty(liveSourceVideoId) || string.IsNullOrEmpty(sourceVideoIdAtPopout)) return action;
+        if (string.Equals(liveSourceVideoId, sourceVideoIdAtPopout, StringComparison.Ordinal)) return action;
+
+        return string.IsNullOrEmpty(returnedVideoId) ? ReturnAction.None : ReturnAction.Navigate;
+    }
+
+    /// <summary>
     /// Resolve the volume/mute/rate to re-apply to the Source Window on return. The Popout Player's
     /// reported value wins when known; otherwise fall back to the source's pre-suppression launch value.
     /// Mute is forced to a concrete value (default un-muted) because popout launch now MUTES the source
