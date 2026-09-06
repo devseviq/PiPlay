@@ -558,6 +558,44 @@ public class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Save_reports_whether_it_wrote_was_refused_or_failed()
+    {
+        File.WriteAllText(_path, "{\"schemaVersion\":3}");
+        var refused = new SettingsService(_path, _ => throw new IOException("locked"));
+        refused.Load();
+        Assert.Equal(SettingsSaveResult.RefusedUnread, refused.Save(new AppSettings()));
+
+        var svc = new SettingsService(_path);
+        svc.Load();
+        Assert.Equal(SettingsSaveResult.Saved, svc.Save(new AppSettings()));
+
+        var unwritable = new SettingsService(Path.Combine(_path, "settings.json"));   // a file cannot be a directory
+        Assert.Equal(SettingsSaveResult.Failed, unwritable.Save(new AppSettings()));
+    }
+
+    [Fact]
+    public void The_unread_flag_follows_the_file_not_the_spelling_of_its_path()
+    {
+        const string original = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}";
+        File.WriteAllText(_path, original);
+        new SettingsService(_path, _ => throw new IOException("locked")).Load();
+
+        var relative = Path.Combine(_dir, ".", "settings.json");   // same file, different spelling
+        Assert.Equal(SettingsSaveResult.RefusedUnread, new SettingsService(relative).Save(new AppSettings()));
+        Assert.Equal(original, File.ReadAllText(_path));
+    }
+
+    [Fact]
+    public void A_file_that_was_read_but_not_parsed_is_never_marked_unread()
+    {
+        File.WriteAllText(_path, "{ this is not valid json ]]]");
+        var svc = new SettingsService(_path);
+        svc.Load();   // corrupt: quarantined, bytes observed
+
+        Assert.Equal(SettingsSaveResult.Saved, svc.Save(new AppSettings()));
+    }
+
+    [Fact]
     public void Save_resumes_after_a_successful_reload_follows_the_read_failure()
     {
         const string original = "{\"schemaVersion\":3,\"lastUrl\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}";

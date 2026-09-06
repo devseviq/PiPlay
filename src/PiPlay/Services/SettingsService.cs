@@ -13,6 +13,17 @@ namespace PiPlay.Services;
 /// not corruption: the file is left untouched and every save is refused until a load
 /// succeeds, so defaults never overwrite data this process failed to read.
 /// </summary>
+public enum SettingsSaveResult
+{
+    Saved,
+
+    /// <summary>The file could not be read this session (spec 12.6): nothing is written until a load succeeds or the user resets.</summary>
+    RefusedUnread,
+
+    /// <summary>The write itself failed; the previous file is intact (atomic replace).</summary>
+    Failed,
+}
+
 public sealed class SettingsService
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -31,14 +42,25 @@ public sealed class SettingsService
     // a different file — and cannot leak between test classes using their own temp paths.
     private static readonly ConcurrentDictionary<string, bool> _unreadByPath = new();
 
+    /// <summary>The unread key: one full path, so relative and absolute spellings of a file share one flag.</summary>
+    private readonly string _unreadKey;
+
     public SettingsService(string? path = null, Func<string, string>? readAllText = null)
     {
         _path = path ?? AppPaths.SettingsFile;
         _readAllText = readAllText ?? File.ReadAllText;
+        _unreadKey = NormalizeKey(_path);
+    }
+
+    private static string NormalizeKey(string path)
+    {
+        try { return Path.GetFullPath(path); }
+        catch { return path; }
     }
 
     public AppSettings Load()
     {
+        string json;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
@@ -47,51 +69,49 @@ public sealed class SettingsService
             if (!File.Exists(_path))
             {
                 Log.Info("Settings file not found; starting with defaults.");
-                _unreadByPath.TryRemove(_path, out _);
+                _unreadByPath.TryRemove(_unreadKey, out _);
                 return Sanitize(new AppSettings());
             }
 
-            var json = _readAllText(_path);
-            try
-            {
-                using var document = JsonDocument.Parse(json);
-                var seedThemeFromLegacy = !HasThemeBlock(document.RootElement);
-                var settings = document.RootElement.Deserialize<AppSettings>(Options);
-                if (settings is not null)
-                {
-                    _unreadByPath.TryRemove(_path, out _);
-                    return Sanitize(settings, seedThemeFromLegacy);
-                }
-
-                Log.Warn("Settings deserialized to null; quarantining and using defaults.");
-            }
-            catch (JsonException ex)
-            {
-                Log.Error("Settings file is corrupt; quarantining and using defaults.", ex);
-            }
-
-            Quarantine();
-            _unreadByPath.TryRemove(_path, out _);
-            return Sanitize(new AppSettings());
+            json = _readAllText(_path);
         }
         catch (Exception ex)
         {
             // Read failure, not corruption: the file was never observed. Keep it in place
             // (no quarantine — the same lock would break the move) and make every Save
             // refuse until some load succeeds, so defaults cannot overwrite unread data.
-            _unreadByPath[_path] = true;
+            // Only this block marks the file unread: everything below has observed its bytes.
+            _unreadByPath[_unreadKey] = true;
             Log.Error("Failed to read settings; using defaults and leaving the file untouched.", ex);
             return Sanitize(new AppSettings());
         }
+
+        _unreadByPath.TryRemove(_unreadKey, out _);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var seedThemeFromLegacy = !HasThemeBlock(document.RootElement);
+            var settings = document.RootElement.Deserialize<AppSettings>(Options);
+            if (settings is not null) return Sanitize(settings, seedThemeFromLegacy);
+
+            Log.Warn("Settings deserialized to null; quarantining and using defaults.");
+        }
+        catch (JsonException ex)
+        {
+            Log.Error("Settings file is corrupt; quarantining and using defaults.", ex);
+        }
+
+        Quarantine();
+        return Sanitize(new AppSettings());
     }
 
-    public void Save(AppSettings settings)
+    public SettingsSaveResult Save(AppSettings settings)
     {
-        if (_unreadByPath.ContainsKey(_path))
+        if (_unreadByPath.ContainsKey(_unreadKey))
         {
             Log.Error("Refusing to save settings: the existing file could not be read this " +
                 "session; saving would overwrite data that was never read.");
-            return;
+            return SettingsSaveResult.RefusedUnread;
         }
 
         try
@@ -99,10 +119,12 @@ public sealed class SettingsService
             Sanitize(settings);
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             AtomicWrite(settings);
+            return SettingsSaveResult.Saved;
         }
         catch (Exception ex)
         {
             Log.Error("Failed to save settings.", ex);
+            return SettingsSaveResult.Failed;
         }
     }
 
@@ -131,7 +153,7 @@ public sealed class SettingsService
             var tmp = _path + ".tmp";
             if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best-effort cleanup */ } }
 
-            _unreadByPath.TryRemove(_path, out _);
+            _unreadByPath.TryRemove(_unreadKey, out _);
             Log.Info("App state reset to defaults (WebView2 session preserved).");
         }
         catch (Exception ex)
