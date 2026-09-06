@@ -12,7 +12,7 @@ Focused is best-effort and reversible. It uses `object-fit: contain`; nonmatchin
 
 Do not download, rip, copy offline, proxy, extract, or re-host media; block, skip, accelerate, or hide ads; change monetization; bypass DRM, age, region, login, or playback restrictions; remove required controls/branding; or inspect/store Google/YouTube credentials.
 
-While YouTube reports `ad-showing` or `ad-interrupting`, custom code must not write `currentTime`, change playback rate, invoke Next, or issue another skip-capable action. Unknown ad state fails closed. User play/pause/mute may delegate to native controls but PiPlay must not automate them to affect ad delivery. (`YouTubeDomBridge`.)
+While YouTube reports `ad-showing` or `ad-interrupting`, custom code must not write `currentTime`, change playback rate, invoke Next, or issue another skip-capable action. Unknown ad state fails closed. User play/pause/mute may delegate to native controls but PiPlay must not automate them to affect ad delivery. Host writes enforce this gate: while the player element carries `ad-showing` or `ad-interrupting`, or ad state is unknown (missing player element or failed probe), host scripts write no `currentTime` and change no `playbackRate`, failing closed; volume/mute and user-requested pause/play remain allowed, and Next remains gated as before. (`YouTubeDomBridge`.)
 
 ## Host-action boundary
 

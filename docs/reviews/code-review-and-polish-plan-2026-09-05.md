@@ -165,6 +165,29 @@ The recommended five-point polishing pass is:
 
 Use SND-HOST for source/build verification and the existing SND-DESK review lane for attended package checks. Source inspection and the fresh gate above do not establish that those visual or audio checks passed. Further theme redesign, Compact revival, tray mode, or transparency architecture changes are outside this polishing pass.
 
+## Implementation record and next steps — 2026-09-05 resumed pass
+
+The first pass through this plan was interrupted mid-PP-03; a resumed pass on the same date finished the started items and closed their acceptance criteria. Status for continuation:
+
+| Item | Status | Evidence |
+|---|---|---|
+| Readiness F-3 (settings read IO failure vs corruption) | Complete | `8d2e378`, plus the resumed-pass follow-up keying the unread flag by settings path with path-independence tests in `SettingsServiceTests.cs`; spec 12.6 records the contract. |
+| PP-08 (rounded-region endpoints) | Complete at the native-membership level | `6d86ea5` (exclusive `+1` endpoints, `int.MaxValue` guard) with straight-edge, corner, and just-outside assertions in `Ui/WpfRuntimeTests.cs`; the policy radius clamp was made deterministic in double space before any int cast. Visual edge captures on a packaged build remain with the SND-DESK acceptance lane. |
+| PP-03 (ad-state gate in every page writer) | Complete at the writer-gate level | `8cf6aa9` (atomic guard inside seek / seek-and-pause / seek-and-play and the playback-rate writer; overlay `isAdActive` fails closed) plus the resumed-pass Node-harness matrix — clear, both ad classes, missing player, and stale document against every writer, asserting side effects including playback rate — and `ReadAdStateAsync` seam tests; `YouTube_Compliance.md` states the gate. |
+| UX/UI evaluation prompt | Recorded | `1c9a3f7`. |
+
+Gate after the resumed pass: `scripts/Test-LocalCI.ps1` **PASS** — 1,176 passed, 0 failed, 0 skipped; Release build zero warnings; stamps unchanged at 0.13.2/39.
+
+Still deferred inside PP-03: the deferred-return bounded wait with the native-controls fallback; `ReadAdStateAsync` has no production caller until that lands.
+
+### Recommended continuation order
+
+1. Commit the verified working tree as one scoped change once the resumed-pass files are reviewed (PP-03 behavioral tests, the settings/region/bridge follow-ups, and the two doc alignments); the full gate above is its evidence.
+2. Batch 1 next: PP-01 with PP-04 and PP-05. Write the incoming-link receiving contract and its tests before changing routing, per this plan. It is the remaining P1/High set and unblocks the external-link behavior the UX evaluation exercises.
+3. PP-02 as its own focused change after batch 1, not interleaved with it; both touch window transition state.
+4. PP-06 and PP-07 remain small independent follow-ups; fold PP-08's visual edge captures and the five-point polish checklist into the next packaged-candidate pass on SND-DESK.
+5. Audit notes from the resumed pass, not yet scheduled: refused settings saves after a read failure are safe but silent (no UI signal); the snap-region test lacks `try/finally` cleanup; region membership tests run at the session DPI only.
+
 ## Retained diagnostic evidence
 
 The full local gate outputs, parser/policy output, native probes, and a copy of the replaced input are retained on the reviewing machine under `$env:TEMP\PiPlayReview-20260905-93063ffdd98c4320aa5943d2c3e2f448`. Files: `local-ci.log`, `consolidated-local-ci.log`, `parser-policy-probe.log`, `region-probe.log`, `region-endpoint-probe.log`, and `retired-review.md`. This temporary evidence directory is not a deployment or release artifact; the durable results are summarized here.

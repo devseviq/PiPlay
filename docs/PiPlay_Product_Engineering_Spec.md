@@ -110,7 +110,7 @@ All normal-page JavaScript belongs in `YouTubeDomBridge`. Host requests are exac
 
 ### 12.6 SettingsService
 
-Schema `4`, sanitization/migration/recovery, atomic persistence. Corrupt `settings.json` is quarantined with a timestamp; quarantines older than 30 days are deleted. (`SettingsService`, `SettingsServiceTests`.)
+Schema `4`, sanitization/migration/recovery, atomic persistence. Corrupt `settings.json` is quarantined with a timestamp; quarantines older than 30 days are deleted. A read IO failure (lock, permissions, disk) is not corruption: SettingsService leaves the file untouched in place and refuses every save until a load succeeds or the user explicitly resets, so defaults never overwrite unread data. (`SettingsService`, `SettingsServiceTests`.)
 
 ## 13. Video Popout lifecycle
 
