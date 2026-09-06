@@ -178,7 +178,7 @@ The first pass through this plan was interrupted mid-PP-03; a resumed pass on th
 
 Gate after the resumed pass: `scripts/Test-LocalCI.ps1` **PASS** — 1,176 passed, 0 failed, 0 skipped; Release build zero warnings; stamps unchanged at 0.13.2/39.
 
-Still deferred inside PP-03: the deferred-return bounded wait with the native-controls fallback; `ReadAdStateAsync` has no production caller until that lands.
+Still deferred inside PP-03 after the resumed pass: the deferred-return bounded wait with the native-controls fallback. Closed in the 2026-09-06 pass below.
 
 ### Recommended continuation order
 
@@ -187,6 +187,25 @@ Still deferred inside PP-03: the deferred-return bounded wait with the native-co
 3. PP-02 as its own focused change after batch 1, not interleaved with it; both touch window transition state.
 4. PP-06 and PP-07 remain small independent follow-ups; fold PP-08's visual edge captures and the five-point polish checklist into the next packaged-candidate pass on SND-DESK.
 5. Audit notes from the resumed pass, not yet scheduled: refused settings saves after a read failure are safe but silent (no UI signal); the snap-region test lacks `try/finally` cleanup; region membership tests run at the session DPI only.
+
+## Implementation record — 2026-09-06 polish pass
+
+The remaining backlog was implemented in the order recommended above (batch 1, then PP-02, then PP-06 with the PP-03 deferred piece and the audit notes). Status:
+
+| Item | Status | Evidence |
+|---|---|---|
+| PP-01 (incoming-link ownership) | Complete | `IncomingLinkPolicy` decides queue / navigate / retarget / retain / reject / unavailable; the hidden Source never navigates during a Popout; retained links apply when the transition ends, including a return that finishes synchronously. `IncomingLinkPolicyTests`, `MainWindowLifecycleTests`; spec REQ-APP-01 and 13.3; ADR-0009. |
+| PP-04 (final return identity and sample together) | Complete | `PlayerWindow` return-identity generation moves on retarget, tracked navigation, and a compact-shell video-id change before any sample lands; `TryApplyReturnPlaybackSample` drops a sample read for another generation. `WpfRuntimeTests`, `MainWindowRecoveryTests`; spec 14. |
+| PP-05 (hand-off acknowledgement and shutdown rejection) | Complete | Line-framed duplex pipe with `accepted` / `rejected` / `unavailable`; a closing instance answers `unavailable` so the sender elects a replacement only after winning the session mutex. The loopback wire tests exposed and removed a real defect: the `StreamWriter` disposal on both ends threw "Pipe is broken" whenever the peer had already left. `SingleInstancePipeTransport`, `SingleInstanceHandoffTests`; spec 9, 11, REQ-APP-01. |
+| PP-02 (WebView2 process failure) | Complete with a scoped Popout cut | `WebViewProcessFailurePolicy` (reload / recreate / log-only / coalesce / bounded budget), Source control recreated in place through the same path as Retry, return-transition deadline, failure stamped on the return state so the Source recovers before acting on it regardless of which window heard of the exit first. The Popout reloads after a renderer exit and closes after a browser-process exit instead of recreating in place (ADR-0010 records why). No first-launch "starting" state was added: the runtime panel only appears for failures and restarts. `WebViewProcessFailurePolicyTests`, `MainWindowRecoveryTests`; spec 14 and 15.4. |
+| PP-06 (clear-data state after the UI timeout) | Complete | Gates follow the coordinator's running operation, not the foreground flag; the Popout closes and every gate shuts before `TryStart`; **Clearing browser data...** on the Pop out button; late completion marshalled once to the dispatcher with a closing/generation check; bounded close logs and does not wait. Deviation: late failure is logged and leaves Clear retryable, with no further prompt after the timeout notice (no non-blocking notice surface exists in the Source). `MainWindowClearDataTests`; spec 19. |
+| PP-03 deferred piece (return under an ad) | Complete | `ReturnReplayAdPolicy`: volume/mute and the play/pause intent apply at once; seek and rate wait up to `12 × 500 ms` for a clear page on the same video, else the page keeps its own position. The "concise status" is a log line; no new Source UI surface was introduced. `ReturnReplayAdPolicyTests`; spec 14, `YouTube_Compliance.md`. |
+| PP-07 (placement coordinate conversion) | Complete | Persisted placement carries its coordinate space; conversion happens at the `WINDOWPLACEMENT` boundary for ordinary and tool windows. `PlacementMathTests`, `WindowPlacementService`; spec 16.4. Live top/left-taskbar and disconnected-monitor restores remain for the SND-DESK lane. |
+| Audit notes | Complete | `SettingsService.Save` returns a result and the Source shows **Settings not saved** once; `Load` marks a file unread only when the read itself fails and keys the flag by full path; the snap-region test releases its native window in `finally`. `SettingsServiceTests`, `MainWindowLifecycleTests`. |
+
+Gate after this pass: `scripts/Test-LocalCI.ps1` **PASS** — 1,359 passed, 0 failed, 0 skipped; Release build zero warnings; stamps unchanged at 0.13.2/39. (Resumed pass 1,176 → batch 1 and PP-07 1,290 → PP-02 1,333 → this total.)
+
+Deviations and open items for the SND-DESK acceptance lane: visual and audio checks of every new state (**Restarting the browser**, **The browser keeps failing**, **Clearing browser data...**, **Settings not saved**); a live A → external link → return with Auto on and off; a live hand-off to a running instance and to a closing one; Popout focus after a retarget from another process; a live browser-process crash with the Popout open and the return landing on the recreated Source; a live clear that exceeds the foreground wait; live placement restore with a top or left taskbar and a disconnected monitor.
 
 ## Retained diagnostic evidence
 

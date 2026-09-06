@@ -61,7 +61,7 @@ No media download/re-hosting, ad blocking, restriction bypass, multiple Popouts,
 
 `net10.0-windows` WPF, nullable, implicit usings; `PublishTrimmed=false`, `PublishSingleFile=false`, `SelfContained=false`. WebView2 package in `src/PiPlay/PiPlay.csproj`; SDK in `global.json`; `PerMonitorV2` in `src/PiPlay/app.manifest`. (ADR-0001–0003, ADR-0007.)
 
-- **REQ-APP-01:** one instance per channel/session. A second launch activates the existing instance and hands off a supported YouTube target where applicable; it never contends for the same WebView2 root.
+- **REQ-APP-01:** one instance per channel/session; a second launch hands its request to the existing instance and never contends for the same WebView2 root. The receiving instance revalidates the payload with `YouTubeUrlHelper.TryParse` and routes it to the playback owner (ADR-0009): queued before browser readiness, Source navigation with no Popout, retarget-and-focus of the existing Popout for a video link while the hidden Source stays put, and retention (latest wins, shown in the address bar and placeholder note) for playlist-only links during a Popout and for any link arriving during launch, return, or Clear browser data; no link only activates. The running instance answers `accepted`, `rejected` (unsupported payload), or `unavailable` (closing); the sender exits after `accepted`, reports a rejected link, and otherwise starts as a replacement only after winning the session mutex, else reports the unresponsive instance. (`IncomingLinkPolicy`, `SingleInstanceHandoffPolicy`, `SingleInstancePipeTransport`, `IncomingLinkPolicyTests`, `SingleInstanceHandoffTests`, `MainWindowLifecycleTests`.)
 - **REQ-APP-02:** exact `--help`, `-h`, and `/?` startup arguments show native executable usage and exit successfully before logging, single-instance election or handoff, settings, WebView2, or window creation. Help wins over every other argument and creates no persistent application state. Outside help, the first argument accepted by `YouTubeUrlHelper.TryParse` is handed to normal startup verbatim; unsupported arguments are ignored.
 
 ## 10. Playback modes and presentation
@@ -84,7 +84,7 @@ Standard is default. Focused overlay: [`YouTube_Compliance.md`](YouTube_Complian
 
 ## 11. Runtime coordination
 
-One WPF dispatcher owns native/window state. Launch, return, navigation, and page calls are generation- or single-flight-guarded. Normal Popout DOM sync `250 ms`; Source suppression `1 s`; normal-page DOM execution `5 s`; connected single-instance client pipe payload `2 s`. Timers stop on close/navigation. (`MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`, `YouTubeDomBridge`, `SingleInstancePipePolicy`, `RuntimeFailurePolicyTests`.)
+One WPF dispatcher owns native/window state. Launch, return, navigation, and page calls are generation- or single-flight-guarded. Normal Popout DOM sync `250 ms`; Source suppression `1 s`; normal-page DOM execution `5 s`; connected single-instance client pipe payload `2 s`; hand-off UI dispatch `5 s`, acknowledgement wait `3 s`, replacement mutex election `3 s`, pipe worker shutdown wait `2 s`. Shutdown stops accepting hand-offs, waits for the pipe worker, drains the log, then releases the session mutex. Timers stop on close/navigation. (`MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`, `YouTubeDomBridge`, `SingleInstancePipePolicy`, `SingleInstanceHandoffPolicy`, `RuntimeFailurePolicyTests`, `SingleInstanceHandoffTests`.)
 
 ## 12. Component contracts
 
@@ -110,7 +110,7 @@ All normal-page JavaScript belongs in `YouTubeDomBridge`. Host requests are exac
 
 ### 12.6 SettingsService
 
-Schema `4`, sanitization/migration/recovery, atomic persistence. Corrupt `settings.json` is quarantined with a timestamp; quarantines older than 30 days are deleted. A read IO failure (lock, permissions, disk) is not corruption: SettingsService leaves the file untouched in place and refuses every save until a load succeeds or the user explicitly resets, so defaults never overwrite unread data. (`SettingsService`, `SettingsServiceTests`.)
+Schema `4`, sanitization/migration/recovery, atomic persistence. Corrupt `settings.json` is quarantined with a timestamp; quarantines older than 30 days are deleted. A read IO failure (lock, permissions, disk) is not corruption: SettingsService leaves the file untouched in place and refuses every save until a load succeeds or the user explicitly resets, so defaults never overwrite unread data. Only the read itself can mark a file unread; a file whose bytes were observed but did not parse is quarantined, not blocked, and the flag follows the file's full path. `Save` reports saved, refused-unread, or failed; the Source shows a one-time title-bar hint, **Settings not saved**, on the first refusal and never a modal for it. (`SettingsService`, `SettingsServiceTests`, `MainWindowLifecycleTests`.)
 
 ## 13. Video Popout lifecycle
 
@@ -124,7 +124,7 @@ Capture Source state and target, acknowledge mute+pause, hide Source WebView, sh
 
 ### 13.3 Source Placeholder
 
-While active, disable Source navigation, URL, profile, and profile-action commands. Auto-off and both recovery actions remain available. **Show Popout** and **Bring video back** remain separate. Must not leave WebView content bleeding through. (`MainWindow.xaml.cs`, XAML tests.)
+While active, disable Source navigation, URL, profile, and profile-action commands; an incoming link does not navigate the hidden Source either (REQ-APP-01). Auto-off and both recovery actions remain available. **Show Popout** and **Bring video back** remain separate. Must not leave WebView content bleeding through. (`MainWindow.xaml.cs`, XAML tests, `MainWindowLifecycleTests`.)
 
 ### 13.4 Race gate
 
@@ -136,7 +136,7 @@ Hide the placeholder, restore Source, restore captured state where possible, rep
 
 ## 14. Return and close
 
-Return state is nullable; zero is a valid timestamp. Known live Popout state wins over launch fallback. Same-video return seeks; a different video/list navigates with context before replaying timestamp, play state, volume/mute, and rate where YouTube permits. Return restores Source placement/Pin and arms Auto de-dup before asynchronous replay. (`PlayerReturnState`, `ReturnPolicy`, `ReturnPolicyTests`, `MainWindow.xaml.cs`.)
+Return state is nullable; zero is a valid timestamp. Known live Popout state wins over launch fallback. Same-video return seeks; a different video/list navigates with context before replaying timestamp, play state, volume/mute, and rate where YouTube permits. A same-video decision is re-checked against the video the Source actually shows: if the Source moved, a known returned video navigates and an unknown one drives nothing. The Popout pairs each playback sample with the navigation and return identity it was read for; a retarget or SPA identity change discards the earlier sample, so the new video returns with unknown time rather than the previous video's. Return restores Source placement/Pin and arms Auto de-dup before asynchronous replay. A return that lands while YouTube reports an ad applies volume/mute and the play/pause intent, then holds the seek and rate for a bounded wait (`12 × 500 ms`), writing them only if the page reports clear while the replay is still for the video the Source shows; after the bound, or if the Source moved, the page keeps its own position and native controls. One return transition is bounded by `20 s`: a navigation whose completion never arrives, or a replay that hangs, releases the Source commands without replaying state. (`PlayerReturnState`, `ReturnPolicy`, `ReturnReplayAdPolicy`, `ReturnPolicyTests`, `ReturnReplayAdPolicyTests`, `MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`, `WpfRuntimeTests`, `MainWindowRecoveryTests`.)
 
 ## 15. WebView and navigation
 
@@ -151,6 +151,8 @@ Failure keeps a safe URL and exposes retry behavior. (`MainWindow.xaml.cs`.)
 ### 15.4 Runtime failure
 
 Missing or failed WebView2 exposes install/retry recovery. (`WebViewEnvironmentService`, `RuntimeFailurePolicyTests`.)
+
+WebView2 process failures are classified once for both surfaces (ADR-0010): a renderer exit reloads the page on the live core, a browser-process exit recreates the Source control in place on the shared environment and returns to the last known page, and helper exits or an unresponsive renderer are logged only. One recovery runs at a time (a recreate coalesces every duplicate; a reload coalesces only another renderer exit), and after three consecutive automatic recoveries within `60 s` the Source shows the failed state, **The browser keeps failing**, with Retry, which resets the budget and takes the same recreate path. The Source panel names each state (**YouTube stopped responding**, **The browser component stopped**, **Restarting the browser**) and leaves on the first completed navigation of the live core; the failed state stays until Retry. The Popout reloads once per renderer exit behind a one-line notice and closes on a browser-process exit, returning playback with its last polled sample; the return state carries the failure so the Source recreates before acting on it, whichever window heard of the exit first. Any return in flight when the browser fails ends immediately; a return that arrives while the browser is restarting or failed is queued as the page the recreated browser opens. (`WebViewProcessFailurePolicy`, `WebViewProcessFailurePolicyTests`, `MainWindowRecoveryTests`, `MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`.)
 
 An unhandled dispatcher exception is logged and recovered from behind at most one message box at a time; a repeat of the same fault signature (exception type plus throw site) within `10 s` of the last dialog is logged only. Out-of-memory, stack-overflow, access-violation, and SEH faults are logged, get one dialog, and are then left to terminate the process rather than marked handled. A fault raised once shutdown has started is logged without a dialog and does not block the exit. (`DispatcherFaultPolicy`, `App`, `RuntimeFailurePolicyTests`.)
 
@@ -170,7 +172,7 @@ Native `12 DIP` resize band and `96 DIP` diagonal reach; not a `96 x 96` content
 
 ### 16.4 Multi-monitor behavior
 
-`PerMonitorV2` is required; restore the prior monitor when available, otherwise clamp to visible work area. (`WindowPlacementService`, `PlacementMathTests`, WPF tests.)
+`PerMonitorV2` is required; restore the prior monitor when available, otherwise clamp to visible work area. Placement persists screen pixels (`CoordinateSpace = "screen"`); the `WINDOWPLACEMENT` workspace offset is converted at the Win32 boundary and unmarked saved values are read as the legacy workspace-relative capture. (`WindowPlacementService`, `PlacementMath`, `PlacementMathTests`, WPF tests.)
 
 ## 17. Profiles and appearance ownership
 
@@ -190,7 +192,7 @@ No telemetry, analytics, crash upload, or credential collection (`PrivacyService
 | Diagnostics | `logs\piplay.log` | plus one `.1` backup |
 | Browser profile | `WebView2UserData\` | cookies, cache, permissions, YouTube/Google session; shared by Source and Popout |
 
-**Reset app state** replaces app settings with defaults, removes stale settings quarantines, and does not touch browser data or logs. **Clear browser data** is separate and confirmed: closes the Popout, `ClearBrowsingDataAsync(AllProfile)`, single-flight through a `30 s` UI timeout. The underlying browser clear determines when the session is actually gone. (`PrivacyService`, `MainWindow.xaml.cs`, `PrivacyServiceTests`.)
+**Reset app state** replaces app settings with defaults, removes stale settings quarantines, and does not touch browser data or logs. **Clear browser data** is separate and confirmed: every playback gate closes and the Popout leaves before the clear starts, then `ClearBrowsingDataAsync(AllProfile)` runs single-flight with a `30 s` foreground status wait. The underlying browser clear determines when the session is actually gone: while it runs, the Pop out button reads **Clearing browser data...**, Source navigation and Auto stay gated, an incoming link is retained, and a second clear is refused; Settings stays usable after the foreground wait. Late completion returns to the dispatcher once: success shows the signed-out YouTube home and reopens the gates, failure reopens them and leaves Clear retryable, and neither shows a further prompt after the timeout notice. Closing does not wait for a running clear and drops its late completion. (`PrivacyService`, `BrowserDataClearCoordinator`, `MainWindow.xaml.cs`, `PrivacyServiceTests`, `MainWindowClearDataTests`.)
 
 ## 20. Accessibility and usability
 
