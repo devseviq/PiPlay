@@ -83,6 +83,17 @@ public static class ReturnPolicy
     }
 
     /// <summary>
+    /// The video a return replay is checked against (PP-01): a Navigate follows the Popout's video;
+    /// a same-video return stays on the page the Source was launched from, which is the better
+    /// identity when the Popout reported none. The Popout's id, possibly null or empty, when the
+    /// launch identity is unknown.
+    /// </summary>
+    public static string? ReplayVideoId(ReturnAction action, string? returnedVideoId, string? sourceVideoIdAtPopout)
+        => action == ReturnAction.Navigate || string.IsNullOrEmpty(sourceVideoIdAtPopout)
+            ? returnedVideoId
+            : sourceVideoIdAtPopout;
+
+    /// <summary>
     /// Resolve the volume/mute/rate to re-apply to the Source Window on return. The Popout Player's
     /// reported value wins when known; otherwise fall back to the source's pre-suppression launch value.
     /// Mute is forced to a concrete value (default un-muted) because popout launch now MUTES the source
