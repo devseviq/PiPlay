@@ -3,8 +3,10 @@
 ## Unreleased
 
 - Same-video return now waits for a clear page before seeking or changing rate, and a Source identity change during that wait drops the stale write.
-- A return that lands while the Source browser is restarting keeps pause, mute, volume, and rate for the replacement core.
-- Duplicate Source renderer crashes coalesce into one reload; a timed-out second-launch hand-off no longer applies after it already answered unavailable.
+- A return that lands while the Source browser is restarting or has given up keeps the video, its position, pause, mute, volume, and rate for the replacement core, including the one Retry starts; a same-video replay the failure interrupts keeps its snapshot for the page the replacement core reopens.
+- The Source controls come back as soon as the browser gives up or a restart runs long, and the waiting return still replays once the replacement browser is ready.
+- Duplicate Source renderer crashes coalesce into one reload, and a reload that never finishes counts as another failure so a crash loop still ends in the failed state with Retry.
+- A second-launch hand-off that timed out before it started applying no longer takes effect afterwards, and one the running instance cannot apply answers unavailable instead of delaying later hand-offs.
 - `PiPlay.exe --help`, `-h`, and `/?` show native usage and exit before normal startup; command-line launch targets remain limited to values accepted by the shared YouTube parser.
 
 ## 0.13.2 — 2026-08-23 (build 39)

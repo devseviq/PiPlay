@@ -115,21 +115,28 @@ public static class SingleInstanceHandoffPolicy
         _ => HandoffSenderAction.ElectReplacement,
     };
 
-    /// <summary>Start a new UI dispatch. The returned generation is current until <see cref="ExpireDispatch"/>.</summary>
-    public static int BeginDispatch(ref int generation) => ++generation;
+    /// <summary>
+    /// Start a new UI dispatch. The returned generation is current until <see cref="ExpireDispatch"/>
+    /// or the next <see cref="BeginDispatch"/>. Atomic: the pipe worker starts a dispatch while a
+    /// timer continuation may be expiring the previous one.
+    /// </summary>
+    public static int BeginDispatch(ref int generation) => Interlocked.Increment(ref generation);
 
     public static bool IsCurrentDispatch(int begunGeneration, int currentGeneration) =>
         begunGeneration == currentGeneration;
 
     /// <summary>
     /// Invalidate an in-flight dispatch so a late UI callback cannot apply a request that already
-    /// answered Unavailable.
+    /// answered Unavailable. Atomic for the same reason as <see cref="BeginDispatch"/>; the UI
+    /// thread must read the field with <c>Volatile.Read</c> to see the write.
     /// </summary>
-    public static void ExpireDispatch(ref int generation) => generation++;
+    public static void ExpireDispatch(ref int generation) => Interlocked.Increment(ref generation);
 
     /// <summary>
     /// Wait for the UI thread to apply one hand-off. A timeout or dispatcher abort answers
     /// Unavailable and runs <paramref name="onExpired"/> so the still-queued callback is cancelled.
+    /// Cancellation is the caller's to handle and is rethrown without expiring anything. The wait
+    /// never resumes on a captured context: the caller is the pipe worker, not the UI thread.
     /// </summary>
     public static async Task<HandoffAck> AwaitDispatchAsync(
         Task<HandoffAck> dispatched,
@@ -141,7 +148,7 @@ public static class SingleInstanceHandoffPolicy
         ArgumentNullException.ThrowIfNull(onExpired);
         try
         {
-            return await dispatched.WaitAsync(timeout ?? DispatchTimeout, cancellationToken);
+            return await dispatched.WaitAsync(timeout ?? DispatchTimeout, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

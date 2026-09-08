@@ -16,6 +16,9 @@ public enum WebViewFailureKind
 
     /// <summary>A subframe renderer, GPU, utility, sandbox, or plugin helper died; WebView2 restarts these itself.</summary>
     HelperProcessExited,
+
+    /// <summary>A reload (after a renderer exit, or after an earlier reload that did not settle) completed no navigation within <see cref="WebViewProcessFailurePolicy.ReloadSettleBound"/>.</summary>
+    ReloadTimedOut,
 }
 
 public enum WebViewRecoveryAction
@@ -41,7 +44,8 @@ public enum WebViewRecoveryAction
 /// exit needs a new control (the Source recreates its own, the Popout closes and lets the Source
 /// own playback); self-recovering helpers are logged. One recovery runs at a time, and the
 /// automatic budget is bounded so a crash loop ends in a visible failed state instead of a
-/// flicker. Follows Microsoft's process-related-events guidance.
+/// flicker; a reload that never lands counts against that budget after <see cref="ReloadSettleBound"/>.
+/// Follows Microsoft's process-related-events guidance.
 /// </summary>
 public static class WebViewProcessFailurePolicy
 {
@@ -57,6 +61,9 @@ public static class WebViewProcessFailurePolicy
     /// </summary>
     public static readonly TimeSpan ReturnTransitionDeadline = TimeSpan.FromSeconds(20);
 
+    /// <summary>Upper bound on one page reload after a renderer exit before it counts as another failure.</summary>
+    public static readonly TimeSpan ReloadSettleBound = TimeSpan.FromSeconds(10);
+
     public static WebViewFailureKind Classify(CoreWebView2ProcessFailedKind kind) => kind switch
     {
         CoreWebView2ProcessFailedKind.BrowserProcessExited => WebViewFailureKind.BrowserProcessExited,
@@ -69,7 +76,8 @@ public static class WebViewProcessFailurePolicy
     /// <paramref name="recoveryInProgress"/> is the recovery already running (Reload or Recreate),
     /// or null. A recreate swallows every duplicate; a reload swallows only another renderer exit,
     /// because the browser process can die while the reload is still pending and a dead core is
-    /// not something a reload ever recovers from.
+    /// not something a reload ever recovers from. A timed-out reload is the pending reload's own
+    /// bound elapsing, so it is never coalesced by that reload.
     /// </summary>
     public static WebViewRecoveryAction Decide(
         WebViewFailureKind kind, int consecutiveRecoveries, WebViewRecoveryAction? recoveryInProgress, bool closing)
@@ -89,6 +97,11 @@ public static class WebViewProcessFailurePolicy
                 return kind == WebViewFailureKind.RendererExited
                     ? WebViewRecoveryAction.Reload
                     : WebViewRecoveryAction.Recreate;
+            case WebViewFailureKind.ReloadTimedOut:
+                if (recoveryInProgress == WebViewRecoveryAction.Recreate) return WebViewRecoveryAction.Ignore;
+                return consecutiveRecoveries >= MaxConsecutiveRecoveries
+                    ? WebViewRecoveryAction.GiveUp
+                    : WebViewRecoveryAction.Reload;
             default:
                 return WebViewRecoveryAction.LogOnly;
         }

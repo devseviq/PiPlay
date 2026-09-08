@@ -111,4 +111,22 @@ public class NavigationPolicyTests
         Assert.False(NavigationPolicy.IsAllowed(U(url), NavigationSurface.Player));
         Assert.False(NavigationPolicy.IsAllowed(U(url), NavigationSurface.Source));
     }
+
+
+    // A failed completion for a navigation that is provably not the latest one started on the core
+    // belongs to a navigation a newer one replaced (a reload issued while the previous reload is
+    // still pending): it rendered nothing, so the reload settle bound, the restart notice, and a
+    // queued return replay must wait for the newer navigation's own completion. A success is never
+    // superseded; a failure for the latest navigation settles the page (WebView2's error page, or
+    // the page's own window.stop()); with no start recorded nothing is skipped.
+    [Theory]
+    [InlineData(false, 1UL, 2UL, true)]
+    [InlineData(false, 2UL, 2UL, false)]
+    [InlineData(true, 1UL, 2UL, false)]
+    [InlineData(false, 3UL, 0UL, false)]
+    public void Only_a_failed_completion_for_a_navigation_a_newer_one_replaced_leaves_the_page_unsettled(
+        bool isSuccess, ulong navigationId, ulong latestStartedNavigationId, bool expected)
+    {
+        Assert.Equal(expected, NavigationPolicy.IsSupersededCompletion(isSuccess, navigationId, latestStartedNavigationId));
+    }
 }

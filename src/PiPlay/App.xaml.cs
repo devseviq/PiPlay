@@ -225,7 +225,10 @@ public partial class App : Application
                 // Re-checked on the UI thread: shutdown can begin between the pipe read and this
                 // callback, and a closing Source must not be handed new work. A timed-out wait
                 // expires the generation so a late pump cannot apply a request already refused.
-                if (!SingleInstanceHandoffPolicy.IsCurrentDispatch(generation, _handoffDispatchGeneration))
+                // The expiry is written from a timer continuation, so read it volatile: nothing
+                // else here forces the UI thread to see that write.
+                var current = Volatile.Read(ref _handoffDispatchGeneration);
+                if (!SingleInstanceHandoffPolicy.IsCurrentDispatch(generation, current))
                     return HandoffAck.Unavailable;
                 if (_shuttingDown || Dispatcher.HasShutdownStarted) return HandoffAck.Unavailable;
                 if (MainWindow is not MainWindow main) return HandoffAck.Unavailable;
@@ -245,10 +248,15 @@ public partial class App : Application
         {
             throw;
         }
+        // Broad on purpose: a throwing UI callback faults the dispatcher operation rather than
+        // reaching DispatcherUnhandledException, and letting it out of here would fail the pipe
+        // server attempt into retry backoff instead of answering this sender Unavailable.
         catch (Exception ex)
         {
+            // Only matters when the callback never ran (InvokeAsync itself threw). A callback that
+            // threw has already run, so there is nothing queued left for the generation to guard.
             SingleInstanceHandoffPolicy.ExpireDispatch(ref _handoffDispatchGeneration);
-            Log.Warn($"Hand-off could not be applied: {ex.GetType().Name}.");
+            Log.Error("Hand-off could not be applied.", ex);
             return HandoffAck.Unavailable;
         }
     }

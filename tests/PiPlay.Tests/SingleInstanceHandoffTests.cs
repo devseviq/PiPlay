@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using PiPlay.Services;
 
@@ -155,6 +156,31 @@ public class SingleInstanceHandoffTests
     }
 
     [Fact]
+    public void A_second_dispatch_start_invalidates_the_first_generation()
+    {
+        var generation = 0;
+        var first = SingleInstanceHandoffPolicy.BeginDispatch(ref generation);
+        var second = SingleInstanceHandoffPolicy.BeginDispatch(ref generation);
+
+        Assert.NotEqual(first, second);
+        Assert.False(SingleInstanceHandoffPolicy.IsCurrentDispatch(first, generation));
+        Assert.True(SingleInstanceHandoffPolicy.IsCurrentDispatch(second, generation));
+    }
+
+    [Fact]
+    public void Concurrent_dispatch_starts_never_share_a_generation()
+    {
+        // The pipe worker begins a dispatch while a timer continuation expires the previous one,
+        // so a lost increment would hand two dispatches the same generation.
+        var generation = 0;
+        var begun = new ConcurrentBag<int>();
+        Parallel.For(0, 20_000, _ => begun.Add(SingleInstanceHandoffPolicy.BeginDispatch(ref generation)));
+
+        Assert.Equal(20_000, begun.Distinct().Count());
+        Assert.Equal(20_000, generation);
+    }
+
+    [Fact]
     public async Task A_dispatch_wait_that_times_out_expires_the_operation_and_answers_unavailable()
     {
         var expired = false;
@@ -187,6 +213,25 @@ public class SingleInstanceHandoffTests
             TimeSpan.FromSeconds(1));
 
         Assert.Equal(HandoffAck.Accepted, ack);
+        Assert.False(expired);
+    }
+
+    [Fact]
+    public async Task A_cancelled_dispatch_wait_rethrows_and_never_expires_the_operation()
+    {
+        var expired = false;
+        var dispatched = new TaskCompletionSource<HandoffAck>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SingleInstanceHandoffPolicy.AwaitDispatchAsync(
+            dispatched.Task,
+            () => expired = true,
+            cts.Token,
+            TimeSpan.FromSeconds(1)));
+
+        // The dispatcher operation was queued with the same token and is aborted by it; the wait
+        // has nothing to expire, and the caller must see the cancellation rather than Unavailable.
         Assert.False(expired);
     }
 
