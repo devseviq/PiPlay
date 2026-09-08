@@ -144,6 +144,53 @@ public class SingleInstanceHandoffTests
     }
 
     [Fact]
+    public void A_dispatch_generation_is_current_until_it_is_expired()
+    {
+        var generation = 0;
+        var begun = SingleInstanceHandoffPolicy.BeginDispatch(ref generation);
+        Assert.True(SingleInstanceHandoffPolicy.IsCurrentDispatch(begun, generation));
+
+        SingleInstanceHandoffPolicy.ExpireDispatch(ref generation);
+        Assert.False(SingleInstanceHandoffPolicy.IsCurrentDispatch(begun, generation));
+    }
+
+    [Fact]
+    public async Task A_dispatch_wait_that_times_out_expires_the_operation_and_answers_unavailable()
+    {
+        var expired = false;
+        var dispatched = new TaskCompletionSource<HandoffAck>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var wait = SingleInstanceHandoffPolicy.AwaitDispatchAsync(
+            dispatched.Task,
+            () => expired = true,
+            CancellationToken.None,
+            TimeSpan.FromMilliseconds(30));
+
+        var ack = await wait;
+        dispatched.TrySetResult(HandoffAck.Accepted);
+
+        Assert.Equal(HandoffAck.Unavailable, ack);
+        Assert.True(expired);
+    }
+
+    [Fact]
+    public async Task A_dispatch_that_answers_in_time_is_not_expired()
+    {
+        var expired = false;
+        var dispatched = new TaskCompletionSource<HandoffAck>(TaskCreationOptions.RunContinuationsAsynchronously);
+        dispatched.SetResult(HandoffAck.Accepted);
+
+        var ack = await SingleInstanceHandoffPolicy.AwaitDispatchAsync(
+            dispatched.Task,
+            () => expired = true,
+            CancellationToken.None,
+            TimeSpan.FromSeconds(1));
+
+        Assert.Equal(HandoffAck.Accepted, ack);
+        Assert.False(expired);
+    }
+
+    [Fact]
     public async Task Send_propagates_the_callers_cancellation()
     {
         using var cts = new CancellationTokenSource();

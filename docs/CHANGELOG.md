@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Same-video return now waits for a clear page before seeking or changing rate, and a Source identity change during that wait drops the stale write.
+- A return that lands while the Source browser is restarting keeps pause, mute, volume, and rate for the replacement core.
+- Duplicate Source renderer crashes coalesce into one reload; a timed-out second-launch hand-off no longer applies after it already answered unavailable.
 - `PiPlay.exe --help`, `-h`, and `/?` show native usage and exit before normal startup; command-line launch targets remain limited to values accepted by the shared YouTube parser.
 
 ## 0.13.2 — 2026-08-23 (build 39)

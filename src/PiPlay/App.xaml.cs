@@ -38,6 +38,7 @@ public partial class App : Application
     private Task? _pipeWorker;
     private readonly DispatcherFaultPolicy _dispatcherFaults = new();
     private bool _shuttingDown;
+    private int _handoffDispatchGeneration;
 
     private static int GetCurrentSessionId()
     {
@@ -216,27 +217,37 @@ public partial class App : Application
     private async Task<HandoffAck> DispatchHandoffAsync(string? url, CancellationToken token)
     {
         if (_shuttingDown || Dispatcher.HasShutdownStarted) return HandoffAck.Unavailable;
+        var generation = SingleInstanceHandoffPolicy.BeginDispatch(ref _handoffDispatchGeneration);
         try
         {
             var operation = Dispatcher.InvokeAsync(() =>
             {
                 // Re-checked on the UI thread: shutdown can begin between the pipe read and this
-                // callback, and a closing Source must not be handed new work.
+                // callback, and a closing Source must not be handed new work. A timed-out wait
+                // expires the generation so a late pump cannot apply a request already refused.
+                if (!SingleInstanceHandoffPolicy.IsCurrentDispatch(generation, _handoffDispatchGeneration))
+                    return HandoffAck.Unavailable;
                 if (_shuttingDown || Dispatcher.HasShutdownStarted) return HandoffAck.Unavailable;
                 if (MainWindow is not MainWindow main) return HandoffAck.Unavailable;
                 var decision = main.ActivateFromSecondInstance(url);
                 return SingleInstanceHandoffPolicy.AckFor(decision, shuttingDown: false);
             }, DispatcherPriority.Normal, token);
-            return await operation.Task.WaitAsync(SingleInstanceHandoffPolicy.DispatchTimeout, token);
+            return await SingleInstanceHandoffPolicy.AwaitDispatchAsync(
+                operation.Task,
+                () =>
+                {
+                    SingleInstanceHandoffPolicy.ExpireDispatch(ref _handoffDispatchGeneration);
+                    operation.Abort();
+                },
+                token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        catch (Exception ex)
         {
-            // Timeout: the UI thread is not answering. Cancellation without our token: the
-            // dispatcher shut down and aborted the operation. Either way there is no owner.
+            SingleInstanceHandoffPolicy.ExpireDispatch(ref _handoffDispatchGeneration);
             Log.Warn($"Hand-off could not be applied: {ex.GetType().Name}.");
             return HandoffAck.Unavailable;
         }

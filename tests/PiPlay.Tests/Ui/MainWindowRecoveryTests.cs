@@ -131,6 +131,29 @@ public class MainWindowRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void Duplicate_renderer_exits_before_the_reload_settles_are_coalesced()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            var t0 = new DateTimeOffset(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
+
+            Assert.Equal(WebViewRecoveryAction.Reload,
+                window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited, t0));
+            Assert.True(window.BrowserReloadInProgressForTests);
+            Assert.Equal(1, window.ConsecutiveBrowserRecoveriesForTests);
+
+            Assert.Equal(WebViewRecoveryAction.Ignore,
+                window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited, t0 + TimeSpan.FromSeconds(1)));
+            Assert.Equal(WebViewRecoveryAction.Ignore,
+                window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited, t0 + TimeSpan.FromSeconds(2)));
+            Assert.Equal(1, window.ConsecutiveBrowserRecoveriesForTests);
+            Assert.True(window.BrowserReloadInProgressForTests);
+        });
+    }
+
+    [Fact]
     public void A_crash_loop_ends_in_the_failed_state_with_retry_enabled()
     {
         StaTestThread.Invoke(() =>
@@ -143,6 +166,8 @@ public class MainWindowRecoveryTests : IDisposable
             {
                 Assert.Equal(WebViewRecoveryAction.Reload,
                     window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited, t0 + TimeSpan.FromSeconds(i)));
+                window.ReleaseBrowserStateAfterNavigationForTests();
+                Assert.False(window.BrowserReloadInProgressForTests);
             }
 
             var final = window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited, t0 + TimeSpan.FromSeconds(10));
@@ -158,6 +183,25 @@ public class MainWindowRecoveryTests : IDisposable
             Assert.Equal(WebViewRecoveryAction.Reload,
                 window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited,
                     t0 + TimeSpan.FromSeconds(10) + WebViewProcessFailurePolicy.StabilityWindow));
+        });
+    }
+
+    [Fact]
+    public void A_browser_process_exit_during_a_reload_still_recreates()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            var old = window.BrowserForTests;
+
+            Assert.Equal(WebViewRecoveryAction.Reload,
+                window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited));
+            var action = window.HandleSourceProcessFailure(WebViewFailureKind.BrowserProcessExited);
+
+            Assert.Equal(WebViewRecoveryAction.Recreate, action);
+            Assert.NotSame(old, window.BrowserForTests);
+            Assert.False(window.BrowserReloadInProgressForTests);
         });
     }
 
@@ -199,11 +243,23 @@ public class MainWindowRecoveryTests : IDisposable
 
             window.ApplyReturnActionAsync(new PlayerReturnState
             {
-                VideoId = "AAAAAAAAAAA", PlaylistId = "PL0123456789", LastKnownSeconds = 42,
+                VideoId = "AAAAAAAAAAA",
+                PlaylistId = "PL0123456789",
+                LastKnownSeconds = 42,
+                Paused = true,
+                Volume = 0.25,
+                Muted = true,
+                PlaybackRate = 1.5,
             }).GetAwaiter().GetResult();
 
             Assert.Equal("https://www.youtube.com/watch?v=AAAAAAAAAAA&list=PL0123456789&t=42s", window.PendingUrlForTests);
-            Assert.Null(window.PendingReturnReplayForTests);
+            Assert.NotNull(window.PendingReturnReplayForTests);
+            Assert.Equal("AAAAAAAAAAA", window.PendingReturnReplayForTests!.VideoId);
+            Assert.Equal(42, window.PendingReturnReplayForTests.LastKnownSeconds);
+            Assert.True(window.PendingReturnReplayForTests.Paused);
+            Assert.Equal(0.25, window.PendingReturnReplayForTests.Volume);
+            Assert.True(window.PendingReturnReplayForTests.Muted);
+            Assert.Equal(1.5, window.PendingReturnReplayForTests.PlaybackRate);
         });
     }
 
@@ -350,8 +406,14 @@ public class MainWindowRecoveryTests : IDisposable
 
             Assert.NotSame(old, window.BrowserForTests);   // the Source recreated before acting on the return
             Assert.Equal("https://www.youtube.com/watch?v=AAAAAAAAAAA&t=42s", window.PendingUrlForTests);
-            Assert.False(window.ReturnInProgressForTests);
-            Assert.Null(window.PendingReturnReplayForTests);
+            Assert.True(window.ReturnInProgressForTests);   // the snapshot waits for the replacement core
+            Assert.NotNull(window.PendingReturnReplayForTests);
+            Assert.Equal("AAAAAAAAAAA", window.PendingReturnReplayForTests!.VideoId);
+            Assert.Equal(42, window.PendingReturnReplayForTests.LastKnownSeconds);
+            Assert.False(window.PendingReturnReplayForTests.Paused);
+            Assert.Equal(0.5, window.PendingReturnReplayForTests.Volume);
+            Assert.False(window.PendingReturnReplayForTests.Muted);
+            Assert.Equal(1.0, window.PendingReturnReplayForTests.PlaybackRate);
             Assert.True(window.IsRuntimeErrorPanelVisibleForTests);   // headless: the environment step fails, Retry waits
             Assert.True(window.IsRuntimeRetryEnabledForTests);
         });
