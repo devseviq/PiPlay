@@ -25,7 +25,25 @@ public partial class MainWindow : Window
     private const string GlyphRestore = "";
     private const string GlyphPopOut = "\uE8A7";
     private const string GlyphBringBack = "\uE73F";
+    /// <summary>Sync arrows for the two progress states of the transfer button (polish review 2026-09-10 F-6).</summary>
+    private const string GlyphTransition = "\uE895";
     private const double CompactToolbarThreshold = 940;
+
+    // Failure-panel notes for work queued behind Retry (polish review 2026-09-10 F-4): a queued
+    // return or navigation is silent otherwise, and a silent queue reads as a lost video.
+    internal const string VideoWaitingNote = "Your video is waiting and returns here when the browser is back.";
+    internal const string PageWaitingNote = "The page you chose opens when the browser is back.";
+    /// <summary>The pop-out rollback notice names the window as the UI does (polish review 2026-09-10 A-1).</summary>
+    internal const string PopoutFailedBody = "PiPlay couldn't pop out this video. Playback stayed in the Source Window.";
+
+    private const string EditProfileTip = "Change the selected profile's name, link or playback settings";
+    private const string DeleteProfileTip = "Remove the selected profile";
+    private const string SelectProfileFirstTip = "Pick a profile in the list first";
+    private const string RetryReadyTip = "Start the browser component again";
+    private const string RetryBusyTip = "Available once the current recovery finishes";
+
+    /// <summary>Whether the Source toolbar is in its compact layout (label-less transfer button).</summary>
+    private bool _compactToolbar;
 
     private SettingsService _settingsService = new();   // replaced only by the test seam
     private AppSettings _settings;
@@ -33,11 +51,14 @@ public partial class MainWindow : Window
     private bool _browserReady;
     // PP-02: one recovery at a time; the consecutive budget ends a crash loop in a visible state.
     private bool _browserRecoveryInProgress;
+    private bool _browserReloadInProgress;
     private bool _browserFailed;
     private int _consecutiveBrowserRecoveries;
     private DateTimeOffset? _lastBrowserFailureUtc;
     private string? _lastKnownSourceUrl;
     private System.Windows.Threading.DispatcherTimer? _returnDeadlineTimer;
+    private System.Windows.Threading.DispatcherTimer? _reloadSettleTimer;
+    private ulong _latestSourceNavigationId;
     private bool _placementRestored;
     private bool _loadingProfiles;
     private string? _pendingUrl;
@@ -256,46 +277,118 @@ public partial class MainWindow : Window
             ShowRuntimeError(
                 "WebView2 Runtime is required",
                 "PiPlay needs the Microsoft Edge WebView2 Evergreen Runtime to display YouTube. " +
-                "Install it, then click Retry.");
+                "Install it, then click Retry.",
+                RuntimeLinkMode.Primary);
         }
         catch (Exception ex)
         {
             if (_mainWindowClosing) return;
             Log.Error("Failed to initialize the Source browser.", ex);
             ShowRuntimeError("The browser component could not start",
-                "PiPlay couldn't start the browser component.\n\n" + ex.Message);
+                "PiPlay couldn't start the browser component.\n\n" + ex.Message,
+                RuntimeLinkMode.Secondary);
         }
     }
 
-    /// <summary>Terminal failed state: the browser is unusable until Retry (spec 15.4).</summary>
-    private void ShowRuntimeError(string heading, string message)
+    /// <summary>
+    /// Terminal failed state: the browser is unusable until Retry (spec 15.4). The link mode says
+    /// which action leads (polish review 2026-09-10 F-3): the runtime download when Retry cannot
+    /// succeed without it, Retry when the runtime is there and merely failed.
+    /// </summary>
+    private void ShowRuntimeError(string heading, string message, RuntimeLinkMode link)
     {
         _browserReady = false;
         _browserFailed = true;
         UpdateAutoDetector();
-        AbandonReturnTransition("the browser failed");
-        ShowBrowserState(heading, message, retryEnabled: true);
+        ShowBrowserState(heading, message, retryEnabled: true, link);
         UpdatePopoutActionState();
         UpdateSourceCommandAvailability();
+        ReleaseReturnGateForFailedBrowser();
+    }
+
+    /// <summary>
+    /// The return gate holds only while a replacement core is on its way (spec 14, ADR-0010). In
+    /// the failed state nothing completes the return until Retry, so the address box, Home and the
+    /// profile commands come back now (Back and Reload wait for a live core, they have nothing to
+    /// act on); a queued snapshot stays armed for the page Retry opens unless a retained link moves
+    /// the Source to another video first (ADR-0009).
+    /// </summary>
+    private void ReleaseReturnGateForFailedBrowser()
+    {
+        if (!_returnInProgress) return;
+        Log.Info("Return gate released: the Source browser is in the failed state; a queued return snapshot waits for Retry.");
+        CompleteReturnTransition();
     }
 
     /// <summary>
     /// The one panel for starting/retrying/failed (PP-02): heading names the failure kind, Retry
     /// is enabled only when nothing is already running. The panel collapses on the next successful
     /// navigation of a live core.
+    /// Polish review 2026-09-10: the runtime link shows only in the failed states and leads only
+    /// when the runtime is missing (F-3); a disabled Retry says why (F-6); the placeholder under
+    /// the panel stops taking focus while the panel covers it (F-10); the note names the work
+    /// queued behind Retry (F-4).
     /// </summary>
-    private void ShowBrowserState(string heading, string message, bool retryEnabled)
+    private void ShowBrowserState(string heading, string message, bool retryEnabled,
+        RuntimeLinkMode link = RuntimeLinkMode.Hidden)
     {
         RuntimeErrorHeading.Text = heading;
         RuntimeErrorText.Text = message;
         RuntimeRetryButton.IsEnabled = retryEnabled;
+        RuntimeRetryButton.ToolTip = retryEnabled ? RetryReadyTip : RetryBusyTip;
+        RuntimeRetryButton.Style = (Style)FindResource(link == RuntimeLinkMode.Primary ? "DarkButton" : "AccentButton");
+        RuntimeDownloadButton.Style = (Style)FindResource(link == RuntimeLinkMode.Primary ? "AccentButton" : "DarkButton");
+        RuntimeDownloadButton.Visibility = link == RuntimeLinkMode.Hidden ? Visibility.Collapsed : Visibility.Visible;
+        // Keep the recommended action first for both reading order and keyboard navigation.
+        var actions = (Panel)RuntimeRetryButton.Parent;
+        var primary = link == RuntimeLinkMode.Primary ? RuntimeDownloadButton : RuntimeRetryButton;
+        if (actions.Children[0] != primary)
+        {
+            actions.Children.Remove(primary);
+            actions.Children.Insert(0, primary);
+        }
+        RuntimeDownloadButton.Margin = link == RuntimeLinkMode.Primary ? new Thickness(0) : new Thickness(10, 0, 0, 0);
+        RuntimeRetryButton.Margin = link == RuntimeLinkMode.Primary ? new Thickness(10, 0, 0, 0) : new Thickness(0);
+        SourcePlaceholder.IsEnabled = false;
         RuntimeErrorPanel.Visibility = Visibility.Visible;
+        RefreshBrowserStateNote();
     }
 
     private void HideBrowserState()
     {
         RuntimeErrorPanel.Visibility = Visibility.Collapsed;
         RuntimeRetryButton.IsEnabled = true;
+        RuntimeRetryButton.ToolTip = RetryReadyTip;
+        SourcePlaceholder.IsEnabled = true;
+        RefreshBrowserStateNote();
+    }
+
+    /// <summary>
+    /// The panel's third line: what Retry (or the automatic restart) will pick up. The pending URL
+    /// is what the replacement core opens, so it wins; a queued return snapshot counts only while
+    /// that URL is its own video or there is no URL at all (ClearStalePendingReturnReplay drops it
+    /// otherwise). Hidden with the panel, and when nothing is queued.
+    /// </summary>
+    private void RefreshBrowserStateNote()
+    {
+        var note = QueuedWorkNote();
+        RuntimeErrorNote.Text = note ?? string.Empty;
+        RuntimeErrorNote.Visibility = note is not null && RuntimeErrorPanel.Visibility == Visibility.Visible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private string? QueuedWorkNote()
+    {
+        var pendingVideo = _pendingReturnReplay?.VideoId;
+        if (_pendingUrl is { } url)
+        {
+            var urlIsPendingVideo = pendingVideo is { Length: > 0 } &&
+                                    YouTubeUrlHelper.TryParse(url, out var target) &&
+                                    string.Equals(target.VideoId, pendingVideo, StringComparison.Ordinal);
+            return urlIsPendingVideo ? VideoWaitingNote : PageWaitingNote;
+        }
+        return _pendingReturnReplay is not null ? VideoWaitingNote : null;
     }
 
     private void DownloadRuntime_Click(object sender, RoutedEventArgs e) =>
@@ -324,7 +417,7 @@ public partial class MainWindow : Window
         var at = now ?? DateTimeOffset.UtcNow;
         var count = WebViewProcessFailurePolicy.ConsecutiveCountFor(_consecutiveBrowserRecoveries, _lastBrowserFailureUtc, at);
         var action = WebViewProcessFailurePolicy.Decide(
-            kind, count, _browserRecoveryInProgress ? WebViewRecoveryAction.Recreate : null, _mainWindowClosing);
+            kind, count, CurrentSourceRecovery(), _mainWindowClosing);
         Log.Info($"Source browser failure {kind}: {action} (consecutive recoveries: {count}).");
         if (action is WebViewRecoveryAction.Ignore or WebViewRecoveryAction.LogOnly) return action;
 
@@ -337,36 +430,89 @@ public partial class MainWindow : Window
                 _consecutiveBrowserRecoveries++;
                 // The core is alive; only the page died. A return in flight has no page to land
                 // on, so it ends here; the reload restores the page itself.
-                AbandonReturnTransition("the page renderer exited");
+                AbandonReturnTransition(kind == WebViewFailureKind.ReloadTimedOut
+                    ? "the page reload did not settle"
+                    : "the page renderer exited");
+                BeginReloadSettle();
                 ShowBrowserState(heading, message, retryEnabled: false);
                 try { Browser.CoreWebView2?.Reload(); }
                 catch (Exception ex)
                 {
+                    EndReloadSettle();
                     Log.Error("Reload after renderer exit failed; recreating the browser instead.", ex);
                     _ = RecreateSourceBrowserAsync("reload failed");
                 }
                 break;
             case WebViewRecoveryAction.Recreate:
                 _consecutiveBrowserRecoveries++;
+                EndReloadSettle();
                 ShowBrowserState(heading, message, retryEnabled: false);
                 _ = RecreateSourceBrowserAsync(kind.ToString());
                 break;
             case WebViewRecoveryAction.GiveUp:
-                ShowRuntimeError(heading, message);
+                EndReloadSettle();
+                ShowRuntimeError(heading, message, RuntimeLinkMode.Secondary);
                 break;
         }
 
         return action;
     }
 
+    private WebViewRecoveryAction? CurrentSourceRecovery()
+    {
+        if (_browserRecoveryInProgress) return WebViewRecoveryAction.Recreate;
+        if (_browserReloadInProgress) return WebViewRecoveryAction.Reload;
+        return null;
+    }
+
+    /// <summary>
+    /// A reload only ends on NavigationCompleted, and a renderer that dies again while it is pending
+    /// is coalesced (PP-02). The settle bound turns a reload that never lands into another counted
+    /// failure, so a crash loop still reaches the failed state instead of reloading forever.
+    /// </summary>
+    private void BeginReloadSettle()
+    {
+        _browserReloadInProgress = true;
+        _reloadSettleTimer ??= CreateReloadSettleTimer();
+        _reloadSettleTimer.Stop();
+        _reloadSettleTimer.Start();
+    }
+
+    private void EndReloadSettle()
+    {
+        _browserReloadInProgress = false;
+        _reloadSettleTimer?.Stop();
+    }
+
+    private System.Windows.Threading.DispatcherTimer CreateReloadSettleTimer()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = WebViewProcessFailurePolicy.ReloadSettleBound,
+        };
+        timer.Tick += (_, _) => OnReloadSettleElapsed();
+        return timer;
+    }
+
+    private WebViewRecoveryAction? OnReloadSettleElapsed(DateTimeOffset? now = null)
+    {
+        _reloadSettleTimer?.Stop();
+        if (!_browserReloadInProgress) return null;
+        _browserReloadInProgress = false;
+        Log.Warn($"The page reload did not settle within {WebViewProcessFailurePolicy.ReloadSettleBound.TotalSeconds:0} s; counting it as another failure.");
+        return HandleSourceProcessFailure(WebViewFailureKind.ReloadTimedOut, now);
+    }
+
     /// <summary>
     /// The single recreate path for Retry and automatic recovery: mark the browser unusable first
-    /// (a dead core is non-null), end any return in flight, swap the control in place, and run the
-    /// same initialization a launch does. The last-known page is the navigation target.
+    /// (a dead core is non-null), swap the control in place, and run the same initialization a
+    /// launch does. A queued return rides along: its page is the pending URL and its snapshot
+    /// replays once the replacement core lands there; otherwise the last-known page is the target.
     /// </summary>
     private async Task RecreateSourceBrowserAsync(string reason)
     {
         if (_browserRecoveryInProgress || _mainWindowClosing) return;
+        EndReloadSettle();
         _browserRecoveryInProgress = true;
         try
         {
@@ -375,7 +521,6 @@ public partial class MainWindow : Window
             UpdateAutoDetector();
             UpdatePopoutActionState();
             UpdateSourceCommandAvailability();
-            AbandonReturnTransition("the browser is restarting");
             var (heading, message) = WebViewProcessFailurePolicy.DescribeRestarting();
             ShowBrowserState(heading, message, retryEnabled: false);
             ReplaceBrowserControl();
@@ -461,6 +606,15 @@ public partial class MainWindow : Window
     {
         _returnDeadlineTimer?.Stop();
         if (!_returnInProgress) return;
+        if (_browserRecoveryInProgress)
+        {
+            // The replacement core is still on its way: release the Source commands but keep the
+            // queued snapshot for the page the new core opens (a retained link that moves the Source
+            // to another video drops it, as any navigation off the pending video does).
+            Log.Warn("Return deadline elapsed while the browser was restarting; the Source is released and the queued snapshot waits for the replacement core.");
+            CompleteReturnTransition();
+            return;
+        }
         // A replay loop that is still running re-checks its pending state every step and stops.
         AbandonReturnTransition("no completion within the return deadline");
     }
@@ -469,6 +623,7 @@ public partial class MainWindow : Window
 
     private void Core_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
+        _latestSourceNavigationId = e.NavigationId;
         ClearStalePendingReturnReplay(e.Uri);
 
         if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) &&
@@ -484,6 +639,14 @@ public partial class MainWindow : Window
 
     private async void Core_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
+        if (NavigationPolicy.IsSupersededCompletion(e.IsSuccess, e.NavigationId, _latestSourceNavigationId))
+        {
+            // A navigation a newer one already replaced rendered nothing; the reload settle bound, the
+            // restart notice, and a queued replay wait for the newer one. Best effort: it needs the
+            // newer NavigationStarting to have arrived first, which WebView2 does not guarantee.
+            Log.Info($"Source navigation {e.NavigationId} ended without a page ({e.WebErrorStatus}) after navigation {_latestSourceNavigationId} replaced it; waiting for that one.");
+            return;
+        }
         ReleaseBrowserStateAfterNavigation();
         if (_pendingReturnReplay is null) return;
         if (!e.IsSuccess)
@@ -504,6 +667,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void ReleaseBrowserStateAfterNavigation()
     {
+        EndReloadSettle();
         if (_browserReady && !_browserRecoveryInProgress) HideBrowserState();
     }
 
@@ -545,7 +709,7 @@ public partial class MainWindow : Window
                 // Re-validate every iteration: a navigation during the retry window can null/replace the
                 // pending state (ClearStalePendingReturnReplay) or move the source off-target. The loop
                 // holds `state` locally, so without this it would replay stale state onto the wrong page.
-                if (!IsPendingReturnReplayCurrent(state)) return;
+                if (!IsPendingReturnReplayCurrent(state, core)) return;
                 if (!IsCurrentSourceReturnReplayTarget(core, state))
                 {
                     if (ReferenceEquals(_pendingReturnReplay, state)) _pendingReturnReplay = null;
@@ -553,7 +717,7 @@ public partial class MainWindow : Window
                 }
 
                 var current = await YouTubeDomBridge.ReadPlayerStateAsync(core);
-                if (!IsPendingReturnReplayCurrent(state)) return;
+                if (!IsPendingReturnReplayCurrent(state, core)) return;
                 if (current is not null)
                 {
                     await ApplyReturnedPlaybackStateAsync(core, state);
@@ -583,79 +747,42 @@ public partial class MainWindow : Window
 
     private static bool IsCurrentSourceReturnReplayTarget(CoreWebView2 core, PlayerReturnState state) =>
         state.VideoId is not { Length: > 0 } expected ||
-        (YouTubeUrlHelper.TryParse(core.Source, out var target) &&
-         string.Equals(target.VideoId, expected, StringComparison.Ordinal));
+        string.Equals(LiveSourceVideoId(core), expected, StringComparison.Ordinal);
 
-    private bool IsPendingReturnReplayCurrent(PlayerReturnState state) =>
-        ReferenceEquals(_pendingReturnReplay, state) && !BrowserDataClearActive && !_mainWindowClosing;
+    /// <summary>
+    /// The request is still the one to apply and <paramref name="core"/> is still the live control's
+    /// core: a recreate leaves the old core dead but non-null, and a replay must not script it.
+    /// </summary>
+    private bool IsPendingReturnReplayCurrent(PlayerReturnState state, CoreWebView2 core) =>
+        ReferenceEquals(_pendingReturnReplay, state) &&
+        ReferenceEquals(Browser.CoreWebView2, core) &&
+        !BrowserDataClearActive && !_mainWindowClosing;
 
     private async Task ApplyReturnedPlaybackStateAsync(CoreWebView2 core, PlayerReturnState state)
     {
-        if (!IsPendingReturnReplayCurrent(state)) return;
-        await YouTubeDomBridge.ApplyPlaybackSettingsAsync(core, state.Volume, state.Muted, state.PlaybackRate);
-        if (!IsPendingReturnReplayCurrent(state)) return;
+        bool StillCurrent() =>
+            IsPendingReturnReplayCurrent(state, core) && IsCurrentSourceReturnReplayTarget(core, state);
 
-        if (!ReturnReplayAdPolicy.WantsGuardedWrite(state.LastKnownSeconds, state.PlaybackRate))
-        {
-            await ApplyReturnedPlayPauseAsync(core, state.Paused);
-            return;
-        }
-
-        // The writers re-check ad state atomically; this read decides whether the seek can go
-        // now or must wait (PP-03). Clear is the common case and keeps the single atomic write.
-        var adState = await YouTubeDomBridge.ReadAdStateAsync(core);
-        if (!IsPendingReturnReplayCurrent(state)) return;
-        if (adState == YouTubeAdState.Clear)
-        {
-            await ApplyReturnedSeekAndPlayPauseAsync(core, state);
-            return;
-        }
-
-        // An ad owns the page. The play/pause intent may go now (user-requested, not an ad
-        // action); the seek and rate are retained for a bounded wait and written only if the
-        // page clears while this replay is still for the video the Source shows.
-        Log.Info($"Return landed on an ad ({adState}); holding the seek for up to {ReturnReplayAdPolicy.WaitBound.TotalSeconds:0} s.");
-        await ApplyReturnedPlayPauseAsync(core, state.Paused);
-        var outcome = await ReturnReplayAdPolicy.WaitForClearAsync(
+        var outcome = await ReturnPlaybackApply.ApplyAsync(
+            state,
             () => YouTubeDomBridge.ReadAdStateAsync(core),
-            () => IsPendingReturnReplayCurrent(state) && IsCurrentSourceReturnReplayTarget(core, state),
+            new ReturnPlaybackWriters(
+                (volume, muted, rate) => YouTubeDomBridge.ApplyPlaybackSettingsAsync(core, volume, muted, rate),
+                paused => ApplyReturnedPlayPauseAsync(core, paused),
+                seconds => YouTubeDomBridge.SeekAsync(core, seconds)),
+            StillCurrent,
             Task.Delay);
+
         switch (outcome)
         {
             case DeferredSeekOutcome.Applied:
-                if (state.LastKnownSeconds is { } seconds) await YouTubeDomBridge.SeekAsync(core, seconds);
-                if (state.PlaybackRate is not null)
-                    await YouTubeDomBridge.ApplyPlaybackSettingsAsync(core, null, null, state.PlaybackRate);
-                Log.Info("Return seek applied after the ad cleared.");
+                Log.Info("Return playback applied.");
                 break;
             case DeferredSeekOutcome.Skipped:
                 Log.Info("Return seek skipped: the ad outlasted the wait; the page keeps its own position and controls.");
                 break;
             default:
-                Log.Info("Return seek dropped: the Source left the returned video during the ad wait.");
-                break;
-        }
-    }
-
-    private static async Task ApplyReturnedSeekAndPlayPauseAsync(CoreWebView2 core, PlayerReturnState state)
-    {
-        switch (state.Paused)
-        {
-            case false when state.LastKnownSeconds is not null:
-                await YouTubeDomBridge.SeekAndPlayAsync(core, state.LastKnownSeconds.Value);
-                break;
-            case true when state.LastKnownSeconds is not null:
-                await YouTubeDomBridge.SeekAndPauseAsync(core, state.LastKnownSeconds.Value);
-                break;
-            case false:
-                await YouTubeDomBridge.PlayAsync(core);
-                break;
-            case true:
-                await YouTubeDomBridge.PauseAsync(core);
-                break;
-            default:
-                if (state.LastKnownSeconds is not null)
-                    await YouTubeDomBridge.SeekAsync(core, state.LastKnownSeconds.Value);
+                Log.Info("Return replay stopped: the request is no longer current (the Source moved to another page or core, a clear started, or the window is closing).");
                 break;
         }
     }
@@ -723,6 +850,7 @@ public partial class MainWindow : Window
             case IncomingLinkAction.QueueUntilReady:
                 _retainedIncomingTarget = null;
                 _pendingUrl = YouTubeUrlHelper.BuildWatchUrl(target!);
+                RefreshBrowserStateNote();
                 break;
             case IncomingLinkAction.NavigateSource:
                 _retainedIncomingTarget = null;
@@ -802,6 +930,7 @@ public partial class MainWindow : Window
         if (!_browserReady || Browser.CoreWebView2 is null)
         {
             _pendingUrl = input;
+            RefreshBrowserStateNote();
             return;
         }
 
@@ -858,11 +987,14 @@ public partial class MainWindow : Window
     private void SourceToolbar_SizeChanged(object sender, SizeChangedEventArgs e) =>
         ApplySourceToolbarLayout(e.NewSize.Width);
 
+    /// <summary>
+    /// Compact below the threshold: the transfer button drops its label. The label decision lives
+    /// in ApplyPopoutActionState so a state change and a resize agree whichever comes first.
+    /// </summary>
     internal void ApplySourceToolbarLayout(double width)
     {
-        var compact = width > 0 && width < CompactToolbarThreshold;
-        PopOutButtonText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        PopOutButtonIcon.Margin = compact ? new Thickness(0) : new Thickness(0, 0, 8, 0);
+        _compactToolbar = width > 0 && width < CompactToolbarThreshold;
+        UpdatePopoutActionState();
     }
 
     private void ProfileActionsButton_Click(object sender, RoutedEventArgs e)
@@ -1109,17 +1241,24 @@ public partial class MainWindow : Window
         var enabled = SourceCommandsAvailable;
         SourceNavigationGroup.IsEnabled = enabled;
         SourceProfileGroup.IsEnabled = enabled;
-        BackButton.IsEnabled = enabled;
-        ReloadButton.IsEnabled = enabled;
+        // Back and Reload call straight into the live core and do nothing without one; the address
+        // box, Home and profiles queue their navigation for the next core instead (spec 15.4), so
+        // they stay open through the failed state (polish review 2026-09-10 F-5).
+        BackButton.IsEnabled = enabled && _browserReady;
+        ReloadButton.IsEnabled = enabled && _browserReady;
         HomeButton.IsEnabled = enabled;
         UrlBox.IsEnabled = enabled;
         ProfilesCombo.IsEnabled = enabled;
         ProfileActionsButton.IsEnabled = enabled;
         SaveProfileMenuItem.IsEnabled = enabled;
 
-        var hasProfile = enabled && ProfilesCombo.SelectedItem is Profile;
+        var selected = ProfilesCombo.SelectedItem is Profile;
+        var hasProfile = enabled && selected;
         EditProfileMenuItem.IsEnabled = hasProfile;
         DeleteProfileMenuItem.IsEnabled = hasProfile;
+        // The two items are disabled for one reason a tooltip can name (polish review 2026-09-10 F-6).
+        EditProfileMenuItem.ToolTip = selected ? EditProfileTip : SelectProfileFirstTip;
+        DeleteProfileMenuItem.ToolTip = selected ? DeleteProfileTip : SelectProfileFirstTip;
         if (!enabled) ProfileActionsMenu.IsOpen = false;
         SettingsButton.IsEnabled = !_returnInProgress && !_privacyActionInProgress && !_mainWindowClosing;
     }
@@ -1163,8 +1302,8 @@ public partial class MainWindow : Window
         var existing = ProfileService.Find(_settings, name);
         if (existing is not null)
         {
-            if (!Prompt.AskConfirm(this, "Overwrite profile?",
-                    $"A profile named \"{name}\" already exists. Overwrite it?", "Overwrite"))
+            if (!Prompt.AskConfirm(this, ProfileService.OverwriteConfirmTitle, ProfileService.OverwriteOnSaveBody(name),
+                    ProfileService.OverwriteConfirmButton, ProfileService.OverwriteConfirmDanger))
             {
                 return;
             }
@@ -1204,9 +1343,10 @@ public partial class MainWindow : Window
         var outcome = ProfileService.Update(_settings, original.Name, updated);
         if (outcome == ProfileUpdateOutcome.NameConflict)
         {
-            // Same overwrite/rename prompt the Save path uses (spec 17: no silent clutter).
-            if (!Prompt.AskConfirm(this, "Overwrite profile?",
-                    $"A profile named \"{updated.Name}\" already exists. Overwrite it?", "Overwrite"))
+            // Same overwrite prompt family as the Save path (spec 17: no silent clutter), with the
+            // rename body: here the OTHER profile is discarded, not merely re-pointed.
+            if (!Prompt.AskConfirm(this, ProfileService.OverwriteConfirmTitle, ProfileService.OverwriteOnRenameBody(updated.Name),
+                    ProfileService.OverwriteConfirmButton, ProfileService.OverwriteConfirmDanger))
             {
                 return;
             }
@@ -1830,10 +1970,21 @@ public partial class MainWindow : Window
     private void SaveSettings()
     {
         var result = _settingsService.Save(_settings);
-        if (result != SettingsSaveResult.RefusedUnread || _settingsSaveRefusalShown) return;
-        _settingsSaveRefusalShown = true;
-        SettingsUnsavedHint.Visibility = Visibility.Visible;
-        Log.Warn("Settings changes are not being saved this session; the title-bar hint is shown once.");
+        if (result == SettingsSaveResult.RefusedUnread)
+        {
+            if (_settingsSaveRefusalShown) return;
+            _settingsSaveRefusalShown = true;
+            SettingsUnsavedHint.Visibility = Visibility.Visible;
+            Log.Warn("Settings changes are not being saved this session; the title-bar hint is shown once.");
+            return;
+        }
+        if (result != SettingsSaveResult.Saved || !_settingsSaveRefusalShown) return;
+        // A later save went through (a successful read or a reset lifted the refusal, spec 12.6):
+        // the hint would now be a false claim, and a fresh refusal must be able to signal again
+        // (polish review 2026-09-10 F-9).
+        _settingsSaveRefusalShown = false;
+        SettingsUnsavedHint.Visibility = Visibility.Collapsed;
+        Log.Info("Settings saves resumed; the title-bar hint is cleared.");
     }
 
     internal bool IsSettingsUnsavedHintVisibleForTests => SettingsUnsavedHint.Visibility == Visibility.Visible;
@@ -2032,7 +2183,7 @@ public partial class MainWindow : Window
                 await YouTubeDomBridge.ApplyPlaybackSettingsAsync(
                     core, launchState?.Volume, launchState?.Muted, launchState?.PlaybackRate);
             if (_sourceWasPlayingAtPopout && core is not null) await YouTubeDomBridge.PlayAsync(core);
-            Prompt.ShowInfo(this, "Pop out video", "PiPlay couldn't pop out this video. It stayed in the main window.");
+            Prompt.ShowInfo(this, "Pop out video", PopoutFailedBody);
         }
         finally
         {
@@ -2130,15 +2281,40 @@ public partial class MainWindow : Window
             PopoutActionState.Clearing => "Clearing browser data...",
             _ => "Pop out video",
         };
-        PopOutButtonIcon.Text = state is PopoutActionState.Ready or PopoutActionState.Clearing ? GlyphPopOut : GlyphBringBack;
-        PopOutButtonText.Text = label;
+        // Compact toolbar (polish review 2026-09-10 F-6): Ready and Open collapse to their glyph,
+        // but the two progress states keep a short label; a lone glyph cannot say "in progress".
+        var compactLabel = state switch
+        {
+            PopoutActionState.Returning => "Returning...",
+            PopoutActionState.Clearing => "Clearing...",
+            _ => null,
+        };
+        var showLabel = !_compactToolbar || compactLabel is not null;
+        PopOutButtonIcon.Text = state switch
+        {
+            PopoutActionState.Ready => GlyphPopOut,
+            PopoutActionState.Open => GlyphBringBack,
+            _ => GlyphTransition,
+        };
+        PopOutButtonIcon.Margin = showLabel ? new Thickness(0, 0, 8, 0) : new Thickness(0);
+        PopOutButtonText.Text = _compactToolbar && compactLabel is not null ? compactLabel : label;
+        PopOutButtonText.Visibility = showLabel ? Visibility.Visible : Visibility.Collapsed;
         System.Windows.Automation.AutomationProperties.SetName(PopOutButton, label);
+        PopOutButton.Style = (Style)FindResource(
+            state is PopoutActionState.Returning or PopoutActionState.Clearing ? "BusyButton" : "AccentButton");
+        // Bring video back stays enabled through a failure (it closes the Popout and queues the
+        // return, spec 14 / ADR-0010); the tooltip must not promise an instant return then (F-4).
+        var browserDown = _browserFailed || _browserRecoveryInProgress;
         PopOutButton.ToolTip = state switch
         {
-            PopoutActionState.Open => "Return playback to the Source Window",
+            PopoutActionState.Open => browserDown
+                ? "Return playback to the Source Window. The video waits there until the browser is back."
+                : "Return playback to the Source Window",
             PopoutActionState.Returning => "Returning playback to the Source Window",
             PopoutActionState.Clearing => "Pop out video is available after the browser-data clear finishes",
-            _ => "Pop out the current video",
+            _ => browserDown || !_browserReady
+                ? "Pop out video is available when the browser is ready"
+                : "Pop out the current video",
         };
         PopOutButton.IsEnabled = state switch
         {
@@ -2255,26 +2431,51 @@ public partial class MainWindow : Window
     {
         _browserReady = ready;
         UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
     }
+
+    /// <summary>Test-only: the terminal failed state as ShowRuntimeError leaves it (not ready, failed).</summary>
+    internal void SetBrowserFailedForTests(bool failed)
+    {
+        _browserFailed = failed;
+        if (failed) _browserReady = false;
+        UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
+    }
+
+    internal void NavigateForTests(string? input) => NavigateInternal(input);
+
+    /// <summary>Test-only: the failure panel's queued-work note, or null while it is hidden.</summary>
+    internal string? RuntimeErrorNoteForTests =>
+        RuntimeErrorNote.Visibility == Visibility.Visible ? RuntimeErrorNote.Text : null;
 
     internal bool BrowserReadyForTests => _browserReady;
     internal bool BrowserRecoveryInProgressForTests => _browserRecoveryInProgress;
+    internal bool BrowserReloadInProgressForTests => _browserReloadInProgress;
     internal bool BrowserFailedForTests => _browserFailed;
     internal int ConsecutiveBrowserRecoveriesForTests => _consecutiveBrowserRecoveries;
-    internal void SetBrowserRecoveryInProgressForTests(bool inProgress) => _browserRecoveryInProgress = inProgress;
+    internal void SetBrowserRecoveryInProgressForTests(bool inProgress)
+    {
+        _browserRecoveryInProgress = inProgress;
+        UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
+    }
     internal WebView2 BrowserForTests => Browser;
     internal void ReplaceBrowserControlForTests() => ReplaceBrowserControl();
     internal Task RecreateSourceBrowserForTestsAsync() => RecreateSourceBrowserAsync("test");
     internal void SetPendingReturnReplayForTests(PlayerReturnState? state) => _pendingReturnReplay = state;
     internal bool IsReturnDeadlineArmedForTests => _returnDeadlineTimer?.IsEnabled == true;
     internal void ElapseReturnDeadlineForTests() => OnReturnDeadlineElapsed();
+    internal bool IsReloadSettleArmedForTests => _reloadSettleTimer?.IsEnabled == true;
+    internal WebViewRecoveryAction? ElapseReloadSettleForTests(DateTimeOffset? now = null) => OnReloadSettleElapsed(now);
     internal string? LastKnownSourceUrlForTests { get => _lastKnownSourceUrl; set => _lastKnownSourceUrl = value; }
     internal bool IsRuntimeErrorPanelVisibleForTests => RuntimeErrorPanel.Visibility == Visibility.Visible;
     internal string RuntimeErrorHeadingForTests => RuntimeErrorHeading.Text;
     internal bool IsRuntimeRetryEnabledForTests => RuntimeRetryButton.IsEnabled;
     internal void ReleaseBrowserStateAfterNavigationForTests() => ReleaseBrowserStateAfterNavigation();
-    internal void ShowBrowserStateForTests(string heading, string message, bool retryEnabled) =>
-        ShowBrowserState(heading, message, retryEnabled);
+    internal void ShowBrowserStateForTests(string heading, string message, bool retryEnabled,
+        RuntimeLinkMode link = RuntimeLinkMode.Hidden) =>
+        ShowBrowserState(heading, message, retryEnabled, link);
 
     private void StartSourceSuppressionGuard()
     {
@@ -2355,7 +2556,10 @@ public partial class MainWindow : Window
             RestoreSourceAfterReturn();
             await ApplyReturnActionAsync(state);
 
-            if (_pendingReturnReplay is null) CompleteReturnTransition();
+            // The gate holds only while a replacement core is on its way; in the failed state the
+            // Source is released now and the queued snapshot waits for the page Retry opens (or is
+            // dropped by a retained link that moves the Source to another video).
+            if (_pendingReturnReplay is null || _browserFailed) CompleteReturnTransition();
 
             SaveSettings();
             Log.Info(_mainWindowClosing ? "Popout Player closed during app shutdown." : "Returned from Video Popout.");
@@ -2386,10 +2590,14 @@ public partial class MainWindow : Window
     internal async Task ApplyReturnActionAsync(PlayerReturnState state)
     {
         if (BrowserDataClearActive) return;
-        if (_browserRecoveryInProgress || _browserFailed)
+        var snapshot = CloneForReturnReplay(
+            state, _sourceWasPlayingAtPopout,
+            _sourceVolumeAtPopout, _sourceMutedAtPopout, _sourcePlaybackRateAtPopout);
+        if (_browserRecoveryInProgress || _browserFailed || state.BrowserProcessFailed)
         {
             // The browser is restarting or failed (PP-02): its core is dead even when non-null.
-            // Keep the returned video as the page the recreated browser opens; never script it.
+            // Queue the page and the full return snapshot so the replacement core, automatic or
+            // the one Retry creates, can replay it.
             if (!string.IsNullOrEmpty(state.VideoId))
             {
                 var target = new YouTubeTarget
@@ -2399,8 +2607,9 @@ public partial class MainWindow : Window
                     StartSeconds = state.LastKnownSeconds,
                 };
                 _autoLastHandledVideoId = state.VideoId;
+                _pendingReturnReplay = snapshot;
                 NavigateInternal(YouTubeUrlHelper.BuildWatchUrl(target));
-                Log.Info("Return arrived while the Source browser was unavailable; the video is queued for the restarted browser.");
+                Log.Info("Return arrived while the Source browser was unavailable; the video and playback snapshot are queued for the restarted browser.");
             }
             return;
         }
@@ -2422,47 +2631,72 @@ public partial class MainWindow : Window
         // Arm before any WebView script await: the Auto timer can run as soon as Player_OnClosed
         // clears _player. A seek/play return leaves the original Source video visible; a Navigate
         // return exposes the player's final video. Either way, return-resume is not a new Auto edge.
-        var returnedSourceVideoId = action == ReturnAction.Navigate
-            ? state.VideoId
-            : _popoutSourceVideoId ?? state.VideoId;
+        var returnedSourceVideoId = ReturnPolicy.ReplayVideoId(action, state.VideoId, _popoutSourceVideoId);
         if (!string.IsNullOrEmpty(returnedSourceVideoId))
             _autoLastHandledVideoId = returnedSourceVideoId;
 
-        if (action != ReturnAction.Navigate && core is not null)
+        if (action == ReturnAction.Navigate)
         {
-            // Popout live value wins; else the pre-suppression launch value; else forced un-mute so
-            // the source can never return silent after launch-time mute suppression (Q-1).
-            var (volume, muted, rate) = ReturnPolicy.ResolveReturnSettings(
-                state.Volume, state.Muted, state.PlaybackRate,
-                _sourceVolumeAtPopout, _sourceMutedAtPopout, _sourcePlaybackRateAtPopout);
-            await YouTubeDomBridge.ApplyPlaybackSettingsAsync(core, volume, muted, rate);
-            if (BrowserDataClearActive || _mainWindowClosing) return;
+            // The popout ended on a DIFFERENT video (recommendation click, playlist
+            // auto-advance, SPA navigation): bring the source to where the user
+            // actually is. The timestamp rides the watch URL; Auto's de-dup key
+            // updates FIRST so the returned video is not instantly re-popped.
+            _pendingReturnReplay = snapshot;
+            NavigateInternal(YouTubeUrlHelper.BuildWatchUrl(
+                new YouTubeTarget { VideoId = state.VideoId, PlaylistId = state.PlaylistId },
+                state.LastKnownSeconds));
+            return;
         }
 
-        switch (action)
+        if (core is null) return;
+        var appliedOn = Browser;
+        // A same-video replay is checked against the page the Source stayed on, not the id the
+        // Popout last reported (they agree unless the Popout reported none).
+        snapshot.VideoId = returnedSourceVideoId;
+        _pendingReturnReplay = snapshot;
+        // Hold the in-progress flag so a NavigationCompleted that lands during the apply cannot
+        // start a second replay of the same snapshot.
+        _pendingReturnReplayInProgress = true;
+        try
         {
-            case ReturnAction.Navigate:
-                // The popout ended on a DIFFERENT video (recommendation click, playlist
-                // auto-advance, SPA navigation): bring the source to where the user
-                // actually is. The timestamp rides the watch URL; Auto's de-dup key
-                // updates FIRST so the returned video is not instantly re-popped.
-                _pendingReturnReplay = CloneForReturnReplay(
-                    state, _sourceWasPlayingAtPopout,
-                    _sourceVolumeAtPopout, _sourceMutedAtPopout, _sourcePlaybackRateAtPopout);
-                NavigateInternal(YouTubeUrlHelper.BuildWatchUrl(
-                    new YouTubeTarget { VideoId = state.VideoId, PlaylistId = state.PlaylistId },
-                    state.LastKnownSeconds));
-                break;
-            case ReturnAction.SeekAndPlay when core is not null:
-                await YouTubeDomBridge.SeekAndPlayAsync(core, state.LastKnownSeconds!.Value);
-                break;
-            case ReturnAction.Seek when core is not null:
-                await YouTubeDomBridge.SeekAndPauseAsync(core, state.LastKnownSeconds!.Value);
-                break;
-            case ReturnAction.Play when core is not null:
-                await YouTubeDomBridge.PlayAsync(core);
-                break;
+            await ApplyReturnedPlaybackStateAsync(core, snapshot);
         }
+        finally
+        {
+            ReleaseDirectReturnReplay(snapshot, appliedOn);
+        }
+    }
+
+    /// <summary>
+    /// Ends a same-video replay on the live core. A browser-process exit or the failed state that
+    /// interrupted the apply leaves its snapshot queued for the page the replacement core reopens,
+    /// the same as a return that arrived during the restart (spec 14, ADR-0010). When that core has
+    /// already landed (its first completed navigation found this replay still in progress), the
+    /// replay is driven again on it now. A snapshot without a video identity is never kept: nothing
+    /// could drop it, and it would replay onto whatever page the replacement core opens. Otherwise
+    /// the snapshot is spent.
+    /// </summary>
+    private void ReleaseDirectReturnReplay(PlayerReturnState snapshot, WebView2 appliedOn)
+    {
+        _pendingReturnReplayInProgress = false;
+        if (!ReferenceEquals(_pendingReturnReplay, snapshot)) return;
+        if (string.IsNullOrEmpty(snapshot.VideoId))
+        {
+            _pendingReturnReplay = null;
+            return;
+        }
+        if (_browserRecoveryInProgress || _browserFailed)
+        {
+            Log.Info("Return replay interrupted by a browser failure; the snapshot waits for the replacement core.");
+            return;
+        }
+        if (!ReferenceEquals(Browser, appliedOn))
+        {
+            Log.Info("Return replay outlived its core; replaying the snapshot on the replacement core.");
+            _ = ReplayPendingReturnStateAsync();
+            return;
+        }
+        _pendingReturnReplay = null;
     }
 
     private static string? LiveSourceVideoId(CoreWebView2? core)
@@ -2493,6 +2727,7 @@ public partial class MainWindow : Window
 
     internal string? AutoLastHandledVideoIdForTests => _autoLastHandledVideoId;
     internal PlayerReturnState? PendingReturnReplayForTests => _pendingReturnReplay;
+    internal void ReleaseDirectReturnReplayForTests(PlayerReturnState snapshot, WebView2 appliedOn) => ReleaseDirectReturnReplay(snapshot, appliedOn);
 
     private static PlayerReturnState CloneForReturnReplay(
         PlayerReturnState state, bool sourceWasPlayingAtPopout,
@@ -2559,6 +2794,7 @@ public partial class MainWindow : Window
             UpdateSourceCommandAvailability();
             _autoTimer?.Stop();
             _returnDeadlineTimer?.Stop();
+            _reloadSettleTimer?.Stop();
             // Close is bounded (PP-06): a clear still running is not waited for and its late
             // completion is dropped by the closing check; the profile may be partially cleared.
             if (_browserDataClearCoordinator.IsRunning)

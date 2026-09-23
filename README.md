@@ -2,6 +2,23 @@
 
 Windows WPF app (`net10.0-windows`, WebView2 Evergreen: `src/PiPlay/PiPlay.csproj`, `global.json`) that plays YouTube in one Video Popout. Product contract: [`docs/PiPlay_Product_Engineering_Spec.md`](docs/PiPlay_Product_Engineering_Spec.md).
 
+## Try the beta
+
+Download the ZIP and matching `.sha256` file from the **0.14.0-beta.1** entry on [GitHub Releases](https://github.com/devseviq/PiPlay/releases). This is a test prerelease; interactive playback/audio and display-scaling acceptance remain pending. It does not promote an installed Stable copy.
+
+- Windows x64 with the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) and [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) installed.
+- [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) for package verification.
+- Extract into a new writable folder, keep every file together, and follow the exact download/verification commands in the release notes before opening `PiPlay.exe`. The build is unsigned.
+- Close any existing PiPlay Stable or test instance first: these packages share the Stable single-instance identity. App data normally lives in `PiPlayData` beside the executable; the verification command uses separate test data outside the package.
+
+Try a playing video with **Pop out video**, then **Bring video back** or close the Popout. Check that there is one audible stream, playback returns to the expected position, and settings survive restarting. Repeat with a playlist/mix when available, then try window movement, resizing, Pin, and your usual display scaling.
+
+Known limitations: brief audio overlap has not been ruled out during ads, autoplay-next, or playlist/mix transitions; exact playlist queue index is not preserved; profile-menu shadow and mixed-DPI appearance need further visual testing. YouTube page changes can affect playback transfer. Unavailable ad/account/profile cases should be recorded as not tested.
+
+[Report beta feedback](https://github.com/devseviq/PiPlay/issues/new/choose) with the release tag, Windows version, display scaling, steps, expected/actual result, and whether ads or a playlist were involved. Review screenshots and logs for personal information before sharing; never attach browser-profile data, cookies, or account credentials.
+
+## Development
+
 Command-line help is owned by the executable:
 
 ```powershell

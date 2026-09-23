@@ -112,4 +112,28 @@ public class WebViewProcessFailurePolicyTests
         Assert.True(WebViewProcessFailurePolicy.ReturnTransitionDeadline > replayLoop + ReturnReplayAdPolicy.WaitBound + TimeSpan.FromSeconds(2));
         Assert.True(WebViewProcessFailurePolicy.ReturnTransitionDeadline <= TimeSpan.FromSeconds(30));
     }
+
+    // A reload whose completion never arrives (the page hangs, or the renderer dies again while the
+    // reload is pending and the duplicate is coalesced) must still count against the budget, or a
+    // crash loop stays in the reloading state forever instead of reaching the failed state.
+    [Fact]
+    public void A_reload_that_does_not_settle_counts_as_another_failure_and_is_never_coalesced_by_the_reload_it_bounds()
+    {
+        Assert.Equal(WebViewRecoveryAction.Reload,
+            WebViewProcessFailurePolicy.Decide(WebViewFailureKind.ReloadTimedOut, 0, recoveryInProgress: WebViewRecoveryAction.Reload, closing: false));
+        Assert.Equal(WebViewRecoveryAction.GiveUp,
+            WebViewProcessFailurePolicy.Decide(WebViewFailureKind.ReloadTimedOut, WebViewProcessFailurePolicy.MaxConsecutiveRecoveries, null, closing: false));
+        Assert.Equal(WebViewRecoveryAction.Ignore,
+            WebViewProcessFailurePolicy.Decide(WebViewFailureKind.ReloadTimedOut, 0, recoveryInProgress: WebViewRecoveryAction.Recreate, closing: false));
+        Assert.Equal(WebViewRecoveryAction.Ignore,
+            WebViewProcessFailurePolicy.Decide(WebViewFailureKind.ReloadTimedOut, 0, null, closing: true));
+    }
+
+    [Fact]
+    public void Reload_settle_bound_lets_a_stuck_reload_loop_reach_the_failed_state_inside_the_stability_window()
+    {
+        Assert.True(WebViewProcessFailurePolicy.ReloadSettleBound > TimeSpan.FromSeconds(2));
+        Assert.True(WebViewProcessFailurePolicy.ReloadSettleBound * WebViewProcessFailurePolicy.MaxConsecutiveRecoveries
+                    < WebViewProcessFailurePolicy.StabilityWindow);
+    }
 }

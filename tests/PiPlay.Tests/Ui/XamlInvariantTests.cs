@@ -121,7 +121,7 @@ public class XamlInvariantTests
             "SaveProfileMenuItem", "EditProfileMenuItem", "DeleteProfileMenuItem", "ShowPopoutButton",
             "SettingsButton", "MinimizeButton", "MaximizeButton", "CloseButton",
             "SourcePlaceholder", "PlaceholderShowPopoutButton", "PlaceholderBringBackButton", "PlaceholderNoteText", "RuntimeErrorPanel", "RuntimeErrorHeading", "RuntimeErrorText", "RuntimeRetryButton",
-            "SettingsUnsavedHint",
+            "RuntimeDownloadButton", "RuntimeErrorNote", "SettingsUnsavedHint",
         }},
         new object[] { "PlayerWindow.xaml", new[]
         {
@@ -439,7 +439,7 @@ public class XamlInvariantTests
 
     [Theory]
     [InlineData("CornerStyleThemeChip", "AppearanceSectionHeader", "AdvancedSectionHeader")] // Appearance owns corners
-    [InlineData("FocusedOverlayToggle", "AppearanceSectionHeader", "AdvancedSectionHeader")] // Appearance owns presentation
+    [InlineData("FocusedOverlayToggle", "AdvancedSectionHeader", "PrivacySectionHeader")]   // Popout behaviour owns presentation (polish review 2026-09-10 A-2)
     [InlineData("FadeDelayShortPreset", "AdvancedSectionHeader", null)]                   // Advanced owns fade delay
     [InlineData("ActiveOpacitySlider", "AdvancedSectionHeader", null)]                    // Advanced owns opacity
     [InlineData("StripAutoHideToggle", "AdvancedSectionHeader", null)]                    // Advanced owns auto-hide
@@ -550,11 +550,50 @@ public class XamlInvariantTests
             "SettingsButton", "MinimizeButton", "MaximizeButton", "CloseButton", "BackButton",
             "ReloadButton", "HomeButton", "UrlBox", "ProfilesCombo", "ProfileActionsButton",
             "PinToggle", "AutoToggle", "ShowPopoutButton", "PlaceholderShowPopoutButton",
+            // Polish review 2026-09-10 F-3/F-6: the failure panel's two actions and the profile
+            // menu's selection-dependent items explain themselves, enabled or not.
+            "PopOutButton", "RuntimeDownloadButton", "RuntimeRetryButton", "EditProfileMenuItem", "DeleteProfileMenuItem",
         })
         {
             Assert.False(string.IsNullOrWhiteSpace(byName[name].Attribute("ToolTip")?.Value),
                 $"{name} is missing a ToolTip (UI-CHK-4).");
         }
+    }
+
+    [Fact]
+    public void Popout_close_tooltip_leads_with_the_return()
+    {
+        // Polish review 2026-09-10 A-5: the Popout chrome never said "Bring video back"; its only
+        // return affordance is the Close X, so the tooltip leads with what closing does.
+        var close = XamlTestFiles.Load("PlayerWindow.xaml").Descendants()
+            .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == "CloseButton");
+        Assert.StartsWith("Bring video back", close.Attribute("ToolTip")?.Value);
+    }
+
+    [Fact]
+    public void Opacity_rows_name_the_windows_each_value_reaches()
+    {
+        // Polish review 2026-09-10 A-4: "In use" also tints the Source top bar but sat under the
+        // Popout-only header with the exception buried in helper text.
+        var settings = XamlTestFiles.Load("SettingsWindow.xaml");
+        string Label(string name) => settings.Descendants()
+            .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == name).Attribute("Text")!.Value;
+        Assert.Contains("Popout", Label("ActiveOpacityLabel"));
+        Assert.Contains("Source", Label("ActiveOpacityLabel"));
+        Assert.Contains("Popout", Label("IdleOpacityLabel"));
+        Assert.DoesNotContain("Source", Label("IdleOpacityLabel"));
+    }
+
+    [Fact]
+    public void Runtime_panel_default_body_points_at_retry()
+    {
+        // Polish review 2026-09-10 A-7: the seeded body told the user to reopen PiPlay while the
+        // Retry button next to it recreates the browser in place.
+        var text = XamlTestFiles.Load("MainWindow.xaml").Descendants()
+            .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == "RuntimeErrorText")
+            .Attribute("Text")?.Value ?? string.Empty;
+        Assert.Contains("Retry", text);
+        Assert.DoesNotContain("reopen", text);
     }
 
     [Fact]
@@ -630,9 +669,9 @@ public class XamlInvariantTests
         var idle = settings.Descendants(XamlTestFiles.Pres + "Slider")
             .Single(e => e.Attribute(XamlTestFiles.X + "Name")?.Value == "IdleOpacitySlider");
 
-        Assert.Equal("Source top bar and active whole popout opacity", active.Attribute("AutomationProperties.Name")?.Value);
-        Assert.Equal("Idle whole popout opacity", idle.Attribute("AutomationProperties.Name")?.Value);
-        Assert.Contains("Source top bar", active.Attribute("ToolTip")?.Value);
+        Assert.Equal("Source title bar and active whole Popout opacity", active.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Equal("Idle whole Popout opacity", idle.Attribute("AutomationProperties.Name")?.Value);
+        Assert.Contains("Source title bar", active.Attribute("ToolTip")?.Value);
         Assert.Contains("whole popout", idle.Attribute("ToolTip")?.Value, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -988,6 +1027,18 @@ public class XamlInvariantTests
     }
 
     [Fact]
+    public void Danger_button_text_reads_on_the_danger_fill()
+    {
+        // Polish review F-1: the Danger seed pair follows the same readability policy as the accent
+        // pair, and matches what ThemeResourceApplier derives for the default preset.
+        var t = ColorTokens();
+        var text = Wcag.ContrastRatio(t["OnDangerColor"], t["DangerPinColor"]);
+        Assert.True(text >= 4.5, $"Danger button text contrast = {text:F2}:1.");
+        var derived = ThemeColors.PickReadableForeground(ThemeColors.ParseColor(ThemeCatalog.PresetFor("sharp-dark").Palette.Danger));
+        Assert.Equal($"#{derived.A:X2}{derived.R:X2}{derived.G:X2}{derived.B:X2}", t["OnDangerColor"]);
+    }
+
+    [Fact]
     public void Accent_primary_token_defaults_to_the_sharp_dark_cyan()
     {
         // Overhaul Task 9: the theme accent token defaults to the existing cyan as a markup fallback
@@ -1019,11 +1070,16 @@ public class XamlInvariantTests
         // flash the wrong glyph color before ThemeResourceApplier runs.
         Assert.Equal(Hex(set.ChromeGlyph), t["AccentChromeGlyphColor"]);
         Assert.Equal(Hex(set.OnAccent), t["OnAccentColor"]);
+        Assert.Equal(Hex(ThemeColors.PickReadableForeground(set.Hover)), t["OnAccentHoverColor"]);
+        Assert.Equal(Hex(ThemeColors.Lighten(ThemeColors.ParseColor(
+            ThemeCatalog.PresetFor("sharp-dark").Palette.Danger), 0.12)), t["DangerHoverColor"]);
         Assert.Equal(Hex(set.OnAccentPressed), t["OnAccentPressedColor"]);
         // Background room tones (docs/Theme_Preset_Differences.md): seeds ARE the derived defaults.
         Assert.Equal(Hex(set.Letterbox), t["AccentLetterboxColor"]);
         Assert.Equal(Hex(set.BackgroundWash), t["AppBackgroundWashColor"]);
         Assert.Equal(Hex(set.PopoutEdge), t["PopoutAccentEdgeColor"]);
+        // Checked-toggle wash (polish review F-7): the seed IS the derived default too.
+        Assert.Equal(Hex(set.CheckedWash), t["AccentCheckedWashColor"]);
     }
 
     [Theory]
@@ -1118,6 +1174,32 @@ public class XamlInvariantTests
             .Select(e => e.Attribute(XamlTestFiles.X + "Key")?.Value)
             .Where(k => k is not null);
         Assert.Contains("DangerButton", keys);
+    }
+
+    [Theory]
+    [InlineData("AccentButton", "OnAccent")]
+    [InlineData("DangerButton", "OnDanger")]
+    public void Filled_button_styles_route_the_fill_foreground_to_their_string_content(string styleKey, string token)
+    {
+        // Polish review F-1: the Foreground is the fill's readability token, the presenter inherits it,
+        // and the presenter scopes a TextBlock style so the generated label cannot fall back to the
+        // app-wide TextPrimary setter.
+        var style = XamlTestFiles.Load("Theme/ControlStyles.xaml").Descendants(XamlTestFiles.Pres + "Style")
+            .Single(e => e.Attribute(XamlTestFiles.X + "Key")?.Value == styleKey);
+        var foreground = style.Elements(XamlTestFiles.Pres + "Setter")
+            .Single(s => s.Attribute("Property")?.Value == "Foreground").Attribute("Value")?.Value;
+        Assert.Equal($"{{DynamicResource {token}}}", foreground);
+
+        var presenter = style.Descendants(XamlTestFiles.Pres + "ContentPresenter").Single();
+        Assert.Equal("{TemplateBinding Foreground}", presenter.Attribute("TextElement.Foreground")?.Value);
+        var scoped = presenter.Descendants(XamlTestFiles.Pres + "Style")
+            .Single(s => s.Attribute("TargetType")?.Value == "TextBlock" && s.Attribute(XamlTestFiles.X + "Key") is null);
+        Assert.Equal("{StaticResource FilledButtonLabel}", scoped.Attribute("BasedOn")?.Value);
+        var shared = XamlTestFiles.Load("Theme/ControlStyles.xaml").Descendants(XamlTestFiles.Pres + "Style")
+            .Single(s => s.Attribute(XamlTestFiles.X + "Key")?.Value == "FilledButtonLabel");
+        var scopedForeground = shared.Elements(XamlTestFiles.Pres + "Setter")
+            .Single(s => s.Attribute("Property")?.Value == "Foreground").Attribute("Value")?.Value;
+        Assert.Contains("Foreground", scopedForeground);
     }
 
     [Fact]

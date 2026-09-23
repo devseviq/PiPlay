@@ -19,8 +19,11 @@ public static class PrivacyService
         "Clears PiPlay settings, saved profiles, and window placement. You'll stay signed in to YouTube.";
     public const string ResetConfirmTitle = "Reset app state?";
     public const string ResetConfirmBody =
-        "This clears PiPlay settings, saved profiles, and window placement.\n\nYou'll stay signed in to YouTube.";
+        "This clears PiPlay settings, saved profiles, and window placement. Saved profiles can't be recovered." +
+        "\n\nYou'll stay signed in to YouTube.";
     public const string ResetConfirmButton = "Reset app state";
+    /// <summary>The reset discards saved profiles for good: destructive styling (polish review 2026-09-10 F-8).</summary>
+    public const bool ResetConfirmDanger = true;
     public const string ResetDoneTitle = "App state reset";
     public const string ResetDoneBody = "PiPlay settings were reset. You're still signed in to YouTube.";
 
@@ -32,7 +35,7 @@ public static class PrivacyService
     public const string ClearConfirmTitle = "Clear browser data?";
     public const string ClearConfirmBody =
         "This signs you out of YouTube and clears PiPlay's browsing data — cookies, cache, and site data." +
-        "\n\nYou'll need to sign in again next time.";
+        "\n\nAn open Video Popout closes first. You'll need to sign in again next time.";
     public const string ClearConfirmButton = "Clear browser data";
     public const string ClearDoneTitle = "Browser data cleared";
     public const string ClearDoneBody = "Browser data cleared. You've been signed out of YouTube.";

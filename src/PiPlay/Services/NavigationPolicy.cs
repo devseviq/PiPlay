@@ -95,4 +95,16 @@ public static class NavigationPolicy
 
         return true;
     }
+
+    /// <summary>
+    /// A failed completion for a navigation that is provably not the latest one started on the core
+    /// belongs to a navigation a newer one replaced (a reload issued while the previous reload is
+    /// still pending). It rendered nothing, so the reload settle bound (spec 15.4), the restart
+    /// notice, and a queued return replay (spec 14) all wait for the newer navigation's own
+    /// completion. A success is never superseded; a failure for the latest navigation settles the
+    /// page (WebView2's error page, or the page's own window.stop(), which WebView2 reports as
+    /// ConnectionAborted on a rendered page); with no start recorded nothing is skipped.
+    /// </summary>
+    public static bool IsSupersededCompletion(bool isSuccess, ulong navigationId, ulong latestStartedNavigationId)
+        => !isSuccess && latestStartedNavigationId != 0 && navigationId != latestStartedNavigationId;
 }

@@ -52,6 +52,25 @@ public class PrivacyServiceTests
     }
 
     [Fact]
+    public void Reset_confirm_says_profiles_cannot_be_recovered_and_is_destructive()
+    {
+        // Polish review 2026-09-10 F-8: the reset wipes saved profiles for good, yet its confirm
+        // wore the accent style of an ordinary action.
+        Assert.True(Has(PrivacyService.ResetConfirmBody, "can't be recovered"),
+            $"Reset wording should say profiles are gone for good: '{PrivacyService.ResetConfirmBody}'");
+        Assert.True(PrivacyService.ResetConfirmDanger);
+    }
+
+    [Fact]
+    public void Clear_confirm_says_the_popout_closes_first()
+    {
+        // Polish review 2026-09-10 F-10: the clear closes an open Video Popout before it runs
+        // (PP-06); a confirm that omits it makes the closing look like a crash.
+        Assert.True(Has(PrivacyService.ClearConfirmBody, "Popout"),
+            $"Clear wording should say the Video Popout closes: '{PrivacyService.ClearConfirmBody}'");
+    }
+
+    [Fact]
     public void Clear_uses_the_all_profile_browsing_data_kind()
     {
         // AllProfile clears cookies + cache + site storage, which logs the user out.

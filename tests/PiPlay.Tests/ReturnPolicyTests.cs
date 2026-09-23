@@ -129,4 +129,21 @@ public class ReturnPolicyTests
         Assert.False(bothUnknown.Muted);     // forced un-mute: suppression is always undone
         Assert.Null(bothUnknown.PlaybackRate);
     }
+
+    // The identity a same-video replay is checked against is the page the Source stayed on (the
+    // launch identity), not whatever the Popout last reported; only a Navigate return follows the
+    // Popout's video. A launch without a video identity has nothing better than the returned id.
+    [Theory]
+    [InlineData(ReturnAction.Navigate, "newVideo0001", "oldVideo0001", "newVideo0001")]
+    [InlineData(ReturnAction.SeekAndPlay, "sameVideo001", "sameVideo001", "sameVideo001")]
+    [InlineData(ReturnAction.Seek, null, "oldVideo0001", "oldVideo0001")]
+    [InlineData(ReturnAction.Seek, "", "oldVideo0001", "oldVideo0001")]
+    [InlineData(ReturnAction.Play, "newVideo0001", null, "newVideo0001")]
+    [InlineData(ReturnAction.Play, "newVideo0001", "", "newVideo0001")]
+    [InlineData(ReturnAction.None, null, null, null)]
+    public void Replay_identity_follows_the_navigate_target_or_the_launch_page(
+        ReturnAction action, string? returnedId, string? sourceIdAtPopout, string? expected)
+    {
+        Assert.Equal(expected, ReturnPolicy.ReplayVideoId(action, returnedId, sourceIdAtPopout));
+    }
 }

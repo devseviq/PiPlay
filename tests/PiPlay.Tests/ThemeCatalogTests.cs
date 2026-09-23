@@ -191,10 +191,11 @@ public class ThemeCatalogTests
         Assert.True(Wcag.ContrastRatio(p.TextPrimary, p.SurfaceRaised) >= 4.5, $"{presetId}: TextPrimary on SurfaceRaised.");
         Assert.True(Wcag.ContrastRatio(p.TextSecondary, p.SurfaceBase) >= 4.5, $"{presetId}: TextSecondary on SurfaceBase.");
 
-        // DangerButton renders white text on the Danger fill. Gated at the 3.0:1 UI-component
-        // level: white-on-red has never met 4.5:1 (the rose #E45D75 used by sharp-dark/soft-glass
-        // is 3.43:1; minimal's warmer #E8564C is 3.58:1) and the button is a large bold CTA.
-        Assert.True(Wcag.ContrastRatio("#FFFFFF", p.Danger) >= 3.0, $"{presetId}: white text on Danger.");
+        // DangerButton text is OnDanger, picked by contrast per preset like OnAccent (polish review
+        // F-1): white never met 4.5:1 on either Danger (3.43:1 rose, 3.58:1 warm), dark ink does.
+        var onDanger = Hex(ThemeColors.PickReadableForeground(ThemeColors.ParseColor(p.Danger)));
+        var dangerText = Wcag.ContrastRatio(onDanger, p.Danger);
+        Assert.True(dangerText >= 4.5, $"{presetId}: OnDanger {onDanger} on Danger = {dangerText:F2}:1.");
 
         // Every offered accent stays readable on every preset's hover surface (glyph gate) and
         // keeps carrying the dark AccentButton text (fill gate).
@@ -204,6 +205,19 @@ public class ThemeCatalogTests
             Assert.True(glyph >= 3.0, $"{presetId}: accent {option.Key} on hover surface = {glyph:F2}:1.");
             var text = Wcag.ContrastRatio("#FF06141A", option.HexColor);
             Assert.True(text >= 4.5, $"{presetId}: dark button text on accent {option.Key} = {text:F2}:1.");
+
+            // Checked toggles (polish review F-7) paint the accent wash behind the glyph/label on the
+            // base and raised surfaces: the glyph must still read on the washed surface, and the wash
+            // must move the surface by at least the pressed-state delta the accent derivation enforces.
+            var set = ThemeColors.DeriveAccentSet(option.HexColor, ThemeCatalog.PresetFor(presetId));
+            foreach (var surface in new[] { p.SurfaceBase, p.SurfaceRaised })
+            {
+                var washed = Hex(ThemeColors.Mix(ThemeColors.ParseColor(surface), set.CheckedWash, set.CheckedWash.A / 255.0));
+                var washedGlyph = Wcag.ContrastRatio(Hex(set.Primary), washed);
+                Assert.True(washedGlyph >= 3.0, $"{presetId}: accent {option.Key} on its checked wash over {surface} = {washedGlyph:F2}:1.");
+                var delta = Wcag.ContrastRatio(surface, washed);
+                Assert.True(delta >= 1.10, $"{presetId}: checked wash of {option.Key} over {surface} moves it only {delta:F2}:1.");
+            }
         }
     }
 

@@ -113,6 +113,8 @@ public partial class SettingsWindow : Window
         AccentColor = ThemeCatalog.NormalizeAccentColor(accentColor);
         AccentPicker.SelectedColor = AccentColor;
         AccentPicker.PreviewColorChanged += AccentPicker_PreviewColorChanged;
+        AccentPicker.ReadabilityChanged += ApplyDoneReadability;
+        ApplyDoneReadability(AccentPicker.IsSelectedReadable);
         _seedingAccentPicker = false;
         AccentTargetText.Text = string.IsNullOrWhiteSpace(accentEditContext)
             ? "Editing the app accent."
@@ -197,6 +199,14 @@ public partial class SettingsWindow : Window
     // The footer "Done" is the visible affirmative commit path. Title-bar close/Esc dismisses so
     // MainWindow can revert any live accent preview.
     private void DoneButton_Click(object sender, RoutedEventArgs e) => CompleteDialog();
+
+    internal const string DoneReadyTip = "Apply your changes and close Settings";
+    internal const string DoneBlockedTip =
+        "Done needs a valid accent such as #2BAED0. Choose a colour or use the default.";
+
+    /// <summary>Done is bound to the picker's readability; the tooltip explains the disabled state (F-6).</summary>
+    private void ApplyDoneReadability(bool readable) =>
+        DoneButton.ToolTip = readable ? DoneReadyTip : DoneBlockedTip;
 
     private void DismissWithoutApplying()
     {
@@ -342,7 +352,7 @@ public partial class SettingsWindow : Window
     {
         ResetAppStateButton.IsEnabled = false;
         if (Prompt.AskConfirm(this, PrivacyService.ResetConfirmTitle, PrivacyService.ResetConfirmBody,
-                PrivacyService.ResetConfirmButton, danger: false))
+                PrivacyService.ResetConfirmButton, danger: PrivacyService.ResetConfirmDanger))
         {
             RequestedAction = PrivacyAction.ResetAppState;
             CompleteDialog();

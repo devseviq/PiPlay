@@ -63,16 +63,31 @@
             <Border x:Name="bd" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}"
                     BorderThickness="{TemplateBinding BorderThickness}"
-                    CornerRadius="{DynamicResource RadiusPanel}" Padding="{DynamicResource DensityPresetChipPadding}">
+                    CornerRadius="{DynamicResource RadiusPanel}">
+              <Grid>
+                <Border x:Name="checkedWash" Background="{DynamicResource AccentCheckedWash}"
+                        CornerRadius="{DynamicResource RadiusPanel}" Visibility="Collapsed" />
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                                TextElement.Foreground="{TemplateBinding Foreground}" />
+                                Margin="{DynamicResource DensityPresetChipPadding}"
+                                TextElement.Foreground="{TemplateBinding Foreground}">
+                <ContentPresenter.Resources>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}" />
+                    <Setter Property="FontWeight" Value="{Binding FontWeight, RelativeSource={RelativeSource AncestorType=ToggleButton}}" />
+                  </Style>
+                </ContentPresenter.Resources>
+              </ContentPresenter>
+              </Grid>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource SurfaceHover}" />
               </Trigger>
+              <!-- Checked = accent hairline + the checked wash fill (polish review 2026-09-10 F-7).
+                   The label stays TextPrimary: a dim accent as label text fell under 4.5:1. -->
               <Trigger Property="IsChecked" Value="True">
-                <Setter Property="Foreground" Value="{DynamicResource AccentPrimary}" />
+                <Setter TargetName="checkedWash" Property="Visibility" Value="Visible" />
+                <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentPrimary}" />
               </Trigger>
             </ControlTemplate.Triggers>
@@ -215,20 +230,6 @@
                      Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
         </Grid>
 
-        <!-- Focused is a Popout PRESENTATION, not the dormant Compact playback mode. It keeps the
-             Normal watch page, expands the player without cropping, and adds optional overlay controls.
-             The preference affects new popouts only. -->
-        <TextBlock Text="Popout presentation" FontSize="12" Foreground="{DynamicResource TextSecondary}"
-                   Margin="0,0,0,6" />
-        <ToggleButton x:Name="FocusedOverlayToggle" Style="{StaticResource PresetToggle}"
-                      MinWidth="150" HorizontalAlignment="Left"
-                      Content="Focused overlay" Click="FocusedOverlayToggle_Click"
-                      ToolTip="For new popouts, fill the window with the complete video and show media controls over it"
-                      AutomationProperties.Name="Use Focused overlay for new popouts" />
-        <TextBlock Text="Fills new Popouts with the complete video without cropping and adds overlay controls."
-                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondary}"
-                   Margin="0,6,0,12" />
-
         <Border Height="1" Background="{DynamicResource BorderSubtle}" Margin="0,18" />
 
         <!-- (removed) Playback section: embed Compact player dropped 2026-06 — embed-disabled
@@ -239,6 +240,21 @@
              OpacityPreviewChanged) survives the re-section untouched. -->
         <TextBlock x:Name="AdvancedSectionHeader" Text="Popout behaviour" FontSize="16" FontWeight="SemiBold"
                    Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,10" />
+
+        <!-- Focused is a Popout PRESENTATION, not the dormant Compact playback mode. It keeps the
+             Normal watch page, expands the player without cropping, and adds optional overlay controls.
+             The preference affects new popouts only, which is why it opens the Popout behaviour
+             section rather than Appearance (polish review 2026-09-10 A-2). -->
+        <TextBlock Text="Popout presentation" FontSize="12" Foreground="{DynamicResource TextSecondary}"
+                   Margin="0,0,0,6" />
+        <ToggleButton x:Name="FocusedOverlayToggle" Style="{StaticResource PresetToggle}"
+                      MinWidth="150" HorizontalAlignment="Left"
+                      Content="Focused overlay" Click="FocusedOverlayToggle_Click"
+                      ToolTip="For new popouts, fill the window with the complete video and show media controls over it"
+                      AutomationProperties.Name="Use Focused overlay for new popouts" />
+        <TextBlock Text="Fills new Popouts with the complete video without cropping and adds overlay controls."
+                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondary}"
+                   Margin="0,6,0,14" />
 
         <TextBlock Text="Fade delay (when Fade is on)" FontSize="12" Foreground="{DynamicResource TextSecondary}"
                    Margin="0,0,0,6" />
@@ -262,41 +278,44 @@
              10-45% are honored only when hand-edited into settings.json (the explicit unlock). -->
         <TextBlock Text="Opacity" FontSize="12" Foreground="{DynamicResource TextSecondary}"
                    Margin="0,12,0,6" />
-        <TextBlock Text="Lower values make the Popout more translucent. In use also tints the Source title-bar background."
+        <TextBlock Text="Lower values make the Popout more translucent. In use also tints the Source title bar background."
                    TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource TextSecondary}"
                    Margin="0,0,0,6" />
-        <Grid Margin="0,0,0,6">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="72" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="44" />
-          </Grid.ColumnDefinitions>
-          <TextBlock Text="In use" FontSize="12" Foreground="{DynamicResource TextPrimary}"
-                     VerticalAlignment="Center" />
-          <Slider Style="{StaticResource DarkSlider}" x:Name="ActiveOpacitySlider" Grid.Column="1" Minimum="45" Maximum="100"
-                  SmallChange="1" LargeChange="10" IsMoveToPointEnabled="True"
-                  VerticalAlignment="Center" ValueChanged="OpacitySlider_ValueChanged"
-                  ToolTip="Source top bar and whole Popout opacity while in use (45-100%)"
-                  AutomationProperties.Name="Source top bar and active whole popout opacity" />
-          <TextBlock x:Name="ActiveOpacityValueText" Grid.Column="2" FontSize="12" TextAlignment="Right"
-                     Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-        </Grid>
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="72" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="44" />
-          </Grid.ColumnDefinitions>
-          <TextBlock Text="When idle" FontSize="12" Foreground="{DynamicResource TextPrimary}"
-                     VerticalAlignment="Center" />
-          <Slider Style="{StaticResource DarkSlider}" x:Name="IdleOpacitySlider" Grid.Column="1" Minimum="45" Maximum="100"
-                  SmallChange="1" LargeChange="10" IsMoveToPointEnabled="True"
-                  VerticalAlignment="Center" ValueChanged="OpacitySlider_ValueChanged"
-                  ToolTip="Whole popout opacity after the mouse goes idle (45-100%)"
-                  AutomationProperties.Name="Idle whole popout opacity" />
-          <TextBlock x:Name="IdleOpacityValueText" Grid.Column="2" FontSize="12" TextAlignment="Right"
-                     Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
-        </Grid>
+        <StackPanel Grid.IsSharedSizeScope="True">
+          <Grid Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" SharedSizeGroup="OpacityLabel" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="44" />
+            </Grid.ColumnDefinitions>
+            <!-- The row labels name the windows each value reaches (polish review 2026-09-10 A-4). -->
+            <TextBlock x:Name="ActiveOpacityLabel" Text="In use (Popout + Source title bar)" FontSize="12"
+                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0" />
+            <Slider Style="{StaticResource DarkSlider}" x:Name="ActiveOpacitySlider" Grid.Column="1" Minimum="45" Maximum="100"
+                    SmallChange="1" LargeChange="10" IsMoveToPointEnabled="True"
+                    VerticalAlignment="Center" ValueChanged="OpacitySlider_ValueChanged"
+                    ToolTip="Source title bar and whole Popout opacity while in use (45-100%)"
+                    AutomationProperties.Name="Source title bar and active whole Popout opacity" />
+            <TextBlock x:Name="ActiveOpacityValueText" Grid.Column="2" FontSize="12" TextAlignment="Right"
+                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+          </Grid>
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" SharedSizeGroup="OpacityLabel" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="44" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="IdleOpacityLabel" Text="When idle (Popout only)" FontSize="12"
+                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0" />
+            <Slider Style="{StaticResource DarkSlider}" x:Name="IdleOpacitySlider" Grid.Column="1" Minimum="45" Maximum="100"
+                    SmallChange="1" LargeChange="10" IsMoveToPointEnabled="True"
+                    VerticalAlignment="Center" ValueChanged="OpacitySlider_ValueChanged"
+                    ToolTip="Whole Popout opacity after the mouse goes idle (45-100%)"
+                    AutomationProperties.Name="Idle whole Popout opacity" />
+            <TextBlock x:Name="IdleOpacityValueText" Grid.Column="2" FontSize="12" TextAlignment="Right"
+                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" />
+          </Grid>
+        </StackPanel>
 
         <!-- Strip auto-hide (spec 7.2, Phase 4): selectable appearance behavior, default off.
              Only engages while the popout's Fade toggle is on (one idleness definition). -->
@@ -338,11 +357,13 @@
         <Button x:Name="CancelButton" Style="{StaticResource DarkButton}" Content="Cancel"
                 MinWidth="88" Margin="0,0,10,0" IsCancel="True" Click="CloseButton_Click"
                 ToolTip="Discard previews and restore your previous appearance" AutomationProperties.Name="Cancel changes" />
+        <!-- ShowOnDisabled (polish review 2026-09-10 F-6): an unreadable accent disables Done, and
+             the tooltip (set in code with the picker's readability) says so. -->
         <Button x:Name="DoneButton" Style="{StaticResource AccentButton}"
                 Content="Done" MinWidth="96" HorizontalAlignment="Right"
                 IsDefault="True" IsEnabled="{Binding IsSelectedReadable, ElementName=AccentPicker}"
                 Click="DoneButton_Click"
-                ToolTip="Apply your changes and close Settings"
+                ToolTip="Apply your changes and close Settings" ToolTipService.ShowOnDisabled="True"
                 AutomationProperties.Name="Done" />
         </StackPanel>
       </Border>

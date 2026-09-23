@@ -135,6 +135,13 @@
     </Setter>
   </Style>
 
+  <!-- String Content generates a TextBlock. Bind its ink to the owning control so the app's
+       implicit TextBlock foreground cannot override a filled button's contrast-selected ink. -->
+  <Style x:Key="FilledButtonLabel" TargetType="TextBlock">
+    <Setter Property="Foreground"
+            Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type Control}}}" />
+  </Style>
+
   <!-- Primary action button (e.g. Pop out video): the accent is the fill, not just an outline.
        OnAccent / OnAccentPressed are generated from the chosen accent so arbitrary user colors get
        the best dark/white foreground. -->
@@ -158,11 +165,21 @@
                               TextOptions.TextFormattingMode="Display"
                               TextOptions.TextHintingMode="Fixed"
                               TextOptions.TextRenderingMode="Grayscale"
-                              Margin="{TemplateBinding Padding}" />
+                              Margin="{TemplateBinding Padding}">
+              <!-- Polish review 2026-09-10 F-1: string Content becomes a TextBlock here, and the
+                   app-wide implicit TextBlock style's Foreground setter outranks the inherited
+                   TextElement.Foreground. This presenter-scoped style replaces it for the label:
+                   Foreground binds to the button's own (DynamicResource) Foreground, and the font and
+                   text options inherit from the button and this presenter instead of the base style. -->
+              <ContentPresenter.Resources>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource FilledButtonLabel}" />
+              </ContentPresenter.Resources>
+            </ContentPresenter>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentHover}" />
+              <Setter Property="Foreground" Value="{DynamicResource OnAccentHover}" />
             </Trigger>
             <!-- Pressed wins over hover (IsPressed implies IsMouseOver). -->
             <Trigger Property="IsPressed" Value="True">
@@ -178,22 +195,56 @@
     </Setter>
   </Style>
 
-  <!-- Destructive action button (e.g. the Clear browser data confirm): red fill, white text. -->
+  <!-- Returning/Clearing are status labels even though the action cannot be clicked. -->
+  <Style TargetType="Button" x:Key="BusyButton" BasedOn="{StaticResource AccentButton}">
+    <Setter Property="Background" Value="{DynamicResource SurfaceRaised}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+    <Setter Property="Cursor" Value="Arrow" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="bd" Background="{TemplateBinding Background}"
+                  CornerRadius="{DynamicResource RadiusButton}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                              TextElement.Foreground="{TemplateBinding Foreground}"
+                              Margin="{TemplateBinding Padding}" />
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- Destructive action button (e.g. the Clear browser data confirm): Danger fill, OnDanger text.
+       OnDanger is picked by contrast per preset like OnAccent (polish review 2026-09-10 F-1): white
+       never reached 4.5:1 on either Danger red, the dark ink does. -->
   <Style TargetType="Button" x:Key="DangerButton" BasedOn="{StaticResource DarkButton}">
     <Setter Property="Background" Value="{DynamicResource DangerPin}" />
-    <Setter Property="Foreground" Value="White" />
+    <Setter Property="Foreground" Value="{DynamicResource OnDanger}" />
     <Setter Property="BorderThickness" Value="0" />
     <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+    <Setter Property="TextOptions.TextHintingMode" Value="Fixed" />
+    <Setter Property="TextOptions.TextRenderingMode" Value="Grayscale" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
           <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="{DynamicResource RadiusButton}">
             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
-                              Margin="{TemplateBinding Padding}" />
+                              TextElement.Foreground="{TemplateBinding Foreground}"
+                              Margin="{TemplateBinding Padding}">
+              <!-- Polish review 2026-09-10 F-1: string Content becomes a TextBlock here, and the
+                   app-wide implicit TextBlock style's Foreground setter outranks the inherited
+                   TextElement.Foreground. This presenter-scoped style replaces it for the label:
+                   Foreground binds to the button's own (DynamicResource) Foreground, and the font and
+                   text options inherit from the button and this presenter instead of the base style. -->
+              <ContentPresenter.Resources>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource FilledButtonLabel}" />
+              </ContentPresenter.Resources>
+            </ContentPresenter>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="bd" Property="Opacity" Value="0.88" />
+              <Setter TargetName="bd" Property="Background" Value="{DynamicResource DangerHover}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.4" />
@@ -276,7 +327,8 @@
     </Setter>
   </Style>
 
-  <!-- Pin/Fade toggle: active = configurable glyph + subtle active border. -->
+  <!-- Pin/Fade toggle: active = configurable glyph + subtle active border + the checked wash fill
+       (polish review 2026-09-10 F-7), so the state is a shape and not only a colour. -->
   <Style TargetType="ToggleButton" x:Key="PinToggle">
     <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocusRing}" />
     <Setter Property="Width" Value="{DynamicResource DensityIconButtonSize}" />
@@ -296,15 +348,26 @@
           <Border x:Name="bd" Background="{TemplateBinding Background}"
                   BorderBrush="{TemplateBinding BorderBrush}"
                   CornerRadius="{DynamicResource RadiusIconButton}" BorderThickness="1">
-            <TextBlock Text="{TemplateBinding Content}"
+            <Grid>
+              <Border x:Name="checkedWash" Background="{DynamicResource AccentCheckedWash}"
+                      CornerRadius="{DynamicResource RadiusIconButton}" Visibility="Collapsed" />
+            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}"
                        FontFamily="{TemplateBinding FontFamily}"
                        FontSize="{TemplateBinding FontSize}"
+                       FontWeight="{TemplateBinding FontWeight}"
                        Foreground="{TemplateBinding Foreground}"
                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
               <Setter TargetName="bd" Property="Background" Value="{DynamicResource SurfaceHover}" />
+            </Trigger>
+            <!-- Layer the wash over the existing surface, retaining hover underneath. -->
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="checkedWash" Property="Visibility" Value="Visible" />
+              <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource AccentCheckedGlyph}" />
+              <Setter Property="FontWeight" Value="SemiBold" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>

@@ -357,6 +357,24 @@ public class ThemeColorsTests
         Assert.Equal(c.B, a.B);
     }
 
+    [Theory]
+    [InlineData("sharp-dark")]
+    [InlineData("minimal")]
+    [InlineData("soft-glass")]
+    public void Checked_wash_is_the_presentation_accent_at_a_fixed_alpha_on_every_preset(string presetId)
+    {
+        // Polish review F-7: the checked-toggle wash is one fixed-alpha tint of the presentation accent.
+        // Fixed, not dial-driven, because it carries STATE (Pin on, preset chosen), which must survive
+        // intensity 0 the way the primary action's fill does.
+        var preset = ThemeCatalog.PresetFor(presetId);
+        foreach (var intensity in new int?[] { null, 0, 100 })
+        {
+            var set = ThemeColors.DeriveAccentSet("#4A8FAB", preset, intensity);
+            Assert.Equal(ThemeColors.CheckedWashAlpha, set.CheckedWash.A);
+            Assert.Equal((set.Primary.R, set.Primary.G, set.Primary.B), (set.CheckedWash.R, set.CheckedWash.G, set.CheckedWash.B));
+        }
+    }
+
     [Fact]
     public void PickReadableForeground_picks_dark_on_a_bright_accent()
     {

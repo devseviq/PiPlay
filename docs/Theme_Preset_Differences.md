@@ -48,7 +48,9 @@ Corner override `theme` follows the preset; `square` is zero radii plus `Square`
 
 ## Accent and persistence
 
-Offered accents are cyan `#2BAED0`, steel-blue `#3F84C0`, steel `#4A8FAB`, violet `#9E84F0`, green `#2DB57F`, and amber `#D69A2E`. Any valid `#RRGGBB` may be stored exactly; presentation tokens are contrast-corrected.
+Hover uses `OnAccentHover`, selected for the lightened accent fill. Pressed continues to use `OnAccentPressed` and takes precedence over hover. `DangerHover` mixes the Danger fill 12% toward white while retaining opaque `OnDanger` text. String labels share the `FilledButtonLabel` style so each state and live theme preview reaches the rendered label (`ControlStyles.xaml`, `ThemeResourceApplier`, `ThemePolishTests`).
+
+Offered accents are cyan `#2BAED0`, steel-blue `#3F84C0`, steel `#4A8FAB`, violet `#9E84F0`, green `#2DB57F`, and amber `#D69A2E`. Any valid `#RRGGBB` may be stored exactly; presentation tokens are contrast-corrected. `OnAccent` and `OnDanger` are the label inks picked by contrast for the accent and Danger fills (the dark ink on every preset's Danger); `AccentCheckedWash` is an overlay derived from the accent at alpha `0x2A`, layered over the toggle surface; checked labels use SemiBold. `AccentCheckedGlyph` corrects checked icon contrast against that wash over `SurfaceHover`. Each ships as a frozen brush with a `...Color` twin (`ThemeResourceApplier`, `ThemePolishTests`).
 
 `theme.accentIntensity` is integer `0–100`, default `50`. At `0`, shared background/title reach and the Popout edge are off; primary controls remain accented and profile-row identity keeps preset `SubtleAlpha` via `ProfileRowWashAlpha`. Toolbar glyphs reach full accent at `50`; the wash continues to `100`. Derivation ceilings are `0.06` for `AccentLetterbox` toward black and `0.04` for `AppBackgroundWash` toward the preset background. `PopoutAccentEdge` is a 1 px inset edge with alpha proportional to intensity; Settings uses `{DynamicResource AppBackground}` (`SettingsWindow.xaml`). `ThemeResourceApplier` does not publish `Muted` or `Glow` as resource keys.
 

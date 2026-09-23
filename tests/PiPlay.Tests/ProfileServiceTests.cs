@@ -34,6 +34,22 @@ public class ProfileServiceTests
     }
 
     [Fact]
+    public void Overwrite_confirm_names_the_profile_and_what_each_path_replaces()
+    {
+        // Polish review 2026-09-10 F-8: "Overwrite it?" on an accent button said neither what is
+        // lost nor that it is destructive. Quick save keeps the old profile's settings and swaps
+        // its link; a rename onto an existing name discards that whole profile.
+        Assert.Contains("\"Trip\"", ProfileService.OverwriteOnSaveBody("Trip"));
+        Assert.Contains("link", ProfileService.OverwriteOnSaveBody("Trip"));
+        Assert.Contains("\"Trip\"", ProfileService.OverwriteOnRenameBody("Trip"));
+        Assert.Contains("settings", ProfileService.OverwriteOnRenameBody("Trip"));
+        Assert.NotEqual(ProfileService.OverwriteOnSaveBody("Trip"), ProfileService.OverwriteOnRenameBody("Trip"));
+        Assert.Equal("Replace", ProfileService.OverwriteConfirmButton);
+        Assert.Contains("Replace", ProfileService.OverwriteConfirmTitle);
+        Assert.True(ProfileService.OverwriteConfirmDanger);
+    }
+
+    [Fact]
     public void Save_existing_overwrites_by_name_and_returns_true()
     {
         var s = WithProfiles("Lo-fi");

@@ -193,6 +193,7 @@ public class MainWindowLifecycleTests : IDisposable
                 },
             });
 
+            window.SetBrowserReadyForTests(true);   // Back/Reload need a live core (polish review 2026-09-10 F-5)
             var back = (Button)window.FindName("BackButton")!;
             var reload = (Button)window.FindName("ReloadButton")!;
             var home = (Button)window.FindName("HomeButton")!;

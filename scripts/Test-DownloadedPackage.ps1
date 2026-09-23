@@ -206,6 +206,32 @@ if ([string]$buildInfo.project -cne 'PiPlay') { throw "project must be 'PiPlay'.
 if ([string]$buildInfo.channel -cne 'Stable') { throw "channel must be 'Stable'." }
 if ([string]$buildInfo.configuration -cne 'Release') { throw "configuration must be 'Release'." }
 if ([string]$buildInfo.primaryArtifact -ine 'PiPlay.exe') { throw "primaryArtifact must be 'PiPlay.exe'." }
+
+# Match the builder's supported SemVer shape, retaining prerelease identity separately from
+# Windows' numeric FileVersion. Numeric identifiers cannot have leading zeroes or empty parts.
+$prereleaseIdentifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+$versionPattern = '\A(?<core>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))' +
+    "(?:-$prereleaseIdentifier(?:\.$prereleaseIdentifier)*)?\z"
+$versionMatch = [regex]::Match([string]$buildInfo.version, $versionPattern)
+if ($buildInfo.version -isnot [string] -or -not $versionMatch.Success) {
+    throw 'version must be a semantic version such as 0.14.0 or 0.14.0-beta.1.'
+}
+foreach ($part in $versionMatch.Groups['core'].Value.Split('.')) {
+    $numericPart = [uint16]0
+    if (-not [uint16]::TryParse($part, [ref]$numericPart)) {
+        throw 'version must have numeric components between 0 and 65535.'
+    }
+}
+if (($buildInfo.buildNumber -isnot [int] -and $buildInfo.buildNumber -isnot [long]) -or
+    $buildInfo.buildNumber -lt 0 -or $buildInfo.buildNumber -gt 65535) {
+    throw 'buildNumber must be an integer between 0 and 65535.'
+}
+$expectedFileVersion = "$($versionMatch.Groups['core'].Value).$($buildInfo.buildNumber)"
+if ($buildInfo.productVersion -isnot [string] -or
+    $buildInfo.productVersion -cne $buildInfo.version) {
+    throw 'ProductVersion must match the complete semantic version, including its prerelease suffix.'
+}
+
 if ([string]$buildInfo.sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
     throw 'sourceCommit must contain exactly 40 hexadecimal characters.'
 }
@@ -308,14 +334,13 @@ if (-not $seen.Contains([System.IO.Path]::GetFullPath($exePath))) {
     throw 'artifactHashes does not cover PiPlay.exe.'
 }
 $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath)
-$expectedFileVersion = "$($buildInfo.version).$($buildInfo.buildNumber)"
 if ($fileVersion.FileVersion -ne $expectedFileVersion) {
     throw "PiPlay.exe FileVersion '$($fileVersion.FileVersion)' does not match '$expectedFileVersion'."
 }
 if ([string]$buildInfo.fileVersion -ne $fileVersion.FileVersion) {
     throw "PiPlay.exe FileVersion does not match build-info.json fileVersion."
 }
-if ($fileVersion.ProductVersion -ne [string]$buildInfo.productVersion) {
+if ($fileVersion.ProductVersion -cne [string]$buildInfo.productVersion) {
     throw "PiPlay.exe ProductVersion does not match build-info.json."
 }
 

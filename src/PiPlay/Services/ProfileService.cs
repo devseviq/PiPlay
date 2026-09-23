@@ -28,10 +28,21 @@ public static class ProfileService
 
     public static bool Exists(AppSettings settings, string name) => Find(settings, name) is not null;
 
-    /// <summary>
-    /// Build the profile saved by the toolbar quick-save action: refresh the URL and current source
-    /// pin state while preserving profile-specific options that quick-save does not expose.
-    /// </summary>
+    // Overwrite confirm (polish review 2026-09-10 F-8): the copy says what each path replaces and
+    // the button is destructive-styled, because both paths discard something the user saved.
+    public const string OverwriteConfirmTitle = "Replace profile?";
+    public const string OverwriteConfirmButton = "Replace";
+    public const bool OverwriteConfirmDanger = true;
+
+    /// <summary>Quick save updates the existing profile's link and Pin, preserving its other options.</summary>
+    public static string OverwriteOnSaveBody(string name) =>
+        $"A profile named \"{name}\" already exists. Replacing it updates that profile's link to the current page and its Pin to the Source Window's current Pin; its other settings stay.";
+
+    /// <summary>Rename onto an existing name: that profile is discarded and this one takes its name.</summary>
+    public static string OverwriteOnRenameBody(string name) =>
+        $"A profile named \"{name}\" already exists. Replacing it discards that profile's link and settings; this profile takes its name.";
+
+    /// <summary>Refresh the URL and Source Pin while preserving options quick save does not expose.</summary>
     public static Profile CreateQuickSaveProfile(Profile? existing, string name, string url, bool topmost) => new()
     {
         Name = name,
