@@ -374,6 +374,34 @@ public class MainWindowRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void Closing_a_popout_after_browser_failure_releases_the_gate_and_preserves_the_queued_return()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            // Return raises the Source HWND; suppress its startup network work for this recovery test.
+            var loaded = typeof(MainWindow).GetMethod("MainWindow_Loaded",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            window.Loaded -= (RoutedEventHandler)loaded.CreateDelegate(typeof(RoutedEventHandler), window);
+            window.SetBrowserFailedForTests(true);
+            var player = NewHeadlessPlayer();
+            window.AttachPlayerWithReturnForTests(player);
+            window.BeginReturnForTests();
+            Assert.True(window.IsReturnDeadlineArmedForTests);
+
+            player.Close();
+
+            Assert.False(window.IsReturnDeadlineArmedForTests);
+            Assert.False(window.ReturnInProgressForTests);
+            Assert.True(window.SourceCommandsAvailableForTests);
+            window.ElapseReturnDeadlineForTests();
+            Assert.NotNull(window.PendingReturnReplayForTests);
+            Assert.Equal("AAAAAAAAAAA", window.PendingReturnReplayForTests.VideoId);
+            Assert.Equal(LinkA, window.PendingUrlForTests);
+        });
+    }
+
+    [Fact]
     public void A_failed_recreate_releases_the_return_gate_but_keeps_the_snapshot_for_retry()
     {
         StaTestThread.Invoke(() =>

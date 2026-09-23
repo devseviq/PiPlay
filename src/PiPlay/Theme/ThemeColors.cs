@@ -175,6 +175,16 @@ public static class ThemeColors
     private const double BackgroundWashMixCeiling = 0.04;
 
     /// <summary>
+    /// Alpha of the checked-toggle wash (polish review 2026-09-10 F-7): the presentation accent laid
+    /// over the toggle's own surface so a checked Pin/Auto/preset chip is a filled shape, not only a
+    /// recoloured glyph or hairline. Fixed rather than dial-driven because it carries STATE, which
+    /// must survive intensity 0 the way the primary action's fill does. 0x2A keeps every catalog
+    /// accent's glyph at or above 3:1 on the washed base/raised surfaces of every preset while moving
+    /// the surface by more than the 1.10:1 pressed-state delta (ThemeCatalogTests).
+    /// </summary>
+    internal const byte CheckedWashAlpha = 0x2A;
+
+    /// <summary>
     /// Derive the accent state tokens for one base accent under a theme (theme-v2 "Derivation
     /// algorithm"). Each theme reads the same base accent differently via its
     /// <see cref="ThemeAccentProfile"/> and its own raised surface.
@@ -236,10 +246,11 @@ public static class ThemeColors
         // The active-profile popout edge: the Border tone alpha-scaled by the dial, so 0 keeps the
         // popout chrome-free and 100 draws the full identity line.
         var popoutEdge = WithAlpha(border, (byte)Math.Round(0xFF * reach));
+        var checkedWash = WithAlpha(primary, CheckedWashAlpha);
 
         return new DerivedAccentSet(
             primary, hover, pressed, muted, border, subtle, glow, shellTint, chromeGlyph,
-            onAccent, onAccentPressed, letterbox, backgroundWash, popoutEdge);
+            onAccent, onAccentPressed, letterbox, backgroundWash, popoutEdge, checkedWash);
     }
 }
 
@@ -278,4 +289,6 @@ public sealed record DerivedAccentSet(
     /// <summary>The window background washed faintly toward the accent; the flat palette value at intensity 0.</summary>
     Color BackgroundWash,
     /// <summary>The popout's 1px identity edge: Border alpha-scaled by the dial; transparent at 0.</summary>
-    Color PopoutEdge);
+    Color PopoutEdge,
+    /// <summary>Checked-toggle fill: Primary at <see cref="ThemeColors.CheckedWashAlpha"/>, independent of the dial.</summary>
+    Color CheckedWash);

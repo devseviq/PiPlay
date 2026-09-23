@@ -25,7 +25,25 @@ public partial class MainWindow : Window
     private const string GlyphRestore = "";
     private const string GlyphPopOut = "\uE8A7";
     private const string GlyphBringBack = "\uE73F";
+    /// <summary>Sync arrows for the two progress states of the transfer button (polish review 2026-09-10 F-6).</summary>
+    private const string GlyphTransition = "\uE895";
     private const double CompactToolbarThreshold = 940;
+
+    // Failure-panel notes for work queued behind Retry (polish review 2026-09-10 F-4): a queued
+    // return or navigation is silent otherwise, and a silent queue reads as a lost video.
+    internal const string VideoWaitingNote = "Your video is waiting and returns here when the browser is back.";
+    internal const string PageWaitingNote = "The page you chose opens when the browser is back.";
+    /// <summary>The pop-out rollback notice names the window as the UI does (polish review 2026-09-10 A-1).</summary>
+    internal const string PopoutFailedBody = "PiPlay couldn't pop out this video. Playback stayed in the Source Window.";
+
+    private const string EditProfileTip = "Change the selected profile's name, link or playback settings";
+    private const string DeleteProfileTip = "Remove the selected profile";
+    private const string SelectProfileFirstTip = "Pick a profile in the list first";
+    private const string RetryReadyTip = "Start the browser component again";
+    private const string RetryBusyTip = "Available once the current recovery finishes";
+
+    /// <summary>Whether the Source toolbar is in its compact layout (label-less transfer button).</summary>
+    private bool _compactToolbar;
 
     private SettingsService _settingsService = new();   // replaced only by the test seam
     private AppSettings _settings;
@@ -259,24 +277,30 @@ public partial class MainWindow : Window
             ShowRuntimeError(
                 "WebView2 Runtime is required",
                 "PiPlay needs the Microsoft Edge WebView2 Evergreen Runtime to display YouTube. " +
-                "Install it, then click Retry.");
+                "Install it, then click Retry.",
+                RuntimeLinkMode.Primary);
         }
         catch (Exception ex)
         {
             if (_mainWindowClosing) return;
             Log.Error("Failed to initialize the Source browser.", ex);
             ShowRuntimeError("The browser component could not start",
-                "PiPlay couldn't start the browser component.\n\n" + ex.Message);
+                "PiPlay couldn't start the browser component.\n\n" + ex.Message,
+                RuntimeLinkMode.Secondary);
         }
     }
 
-    /// <summary>Terminal failed state: the browser is unusable until Retry (spec 15.4).</summary>
-    private void ShowRuntimeError(string heading, string message)
+    /// <summary>
+    /// Terminal failed state: the browser is unusable until Retry (spec 15.4). The link mode says
+    /// which action leads (polish review 2026-09-10 F-3): the runtime download when Retry cannot
+    /// succeed without it, Retry when the runtime is there and merely failed.
+    /// </summary>
+    private void ShowRuntimeError(string heading, string message, RuntimeLinkMode link)
     {
         _browserReady = false;
         _browserFailed = true;
         UpdateAutoDetector();
-        ShowBrowserState(heading, message, retryEnabled: true);
+        ShowBrowserState(heading, message, retryEnabled: true, link);
         UpdatePopoutActionState();
         UpdateSourceCommandAvailability();
         ReleaseReturnGateForFailedBrowser();
@@ -284,9 +308,10 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// The return gate holds only while a replacement core is on its way (spec 14, ADR-0010). In
-    /// the failed state nothing completes the return until Retry, so the Source commands come back
-    /// now; a queued snapshot stays armed for the page Retry opens unless a retained link moves the
-    /// Source to another video first (ADR-0009).
+    /// the failed state nothing completes the return until Retry, so the address box, Home and the
+    /// profile commands come back now (Back and Reload wait for a live core, they have nothing to
+    /// act on); a queued snapshot stays armed for the page Retry opens unless a retained link moves
+    /// the Source to another video first (ADR-0009).
     /// </summary>
     private void ReleaseReturnGateForFailedBrowser()
     {
@@ -299,19 +324,71 @@ public partial class MainWindow : Window
     /// The one panel for starting/retrying/failed (PP-02): heading names the failure kind, Retry
     /// is enabled only when nothing is already running. The panel collapses on the next successful
     /// navigation of a live core.
+    /// Polish review 2026-09-10: the runtime link shows only in the failed states and leads only
+    /// when the runtime is missing (F-3); a disabled Retry says why (F-6); the placeholder under
+    /// the panel stops taking focus while the panel covers it (F-10); the note names the work
+    /// queued behind Retry (F-4).
     /// </summary>
-    private void ShowBrowserState(string heading, string message, bool retryEnabled)
+    private void ShowBrowserState(string heading, string message, bool retryEnabled,
+        RuntimeLinkMode link = RuntimeLinkMode.Hidden)
     {
         RuntimeErrorHeading.Text = heading;
         RuntimeErrorText.Text = message;
         RuntimeRetryButton.IsEnabled = retryEnabled;
+        RuntimeRetryButton.ToolTip = retryEnabled ? RetryReadyTip : RetryBusyTip;
+        RuntimeRetryButton.Style = (Style)FindResource(link == RuntimeLinkMode.Primary ? "DarkButton" : "AccentButton");
+        RuntimeDownloadButton.Style = (Style)FindResource(link == RuntimeLinkMode.Primary ? "AccentButton" : "DarkButton");
+        RuntimeDownloadButton.Visibility = link == RuntimeLinkMode.Hidden ? Visibility.Collapsed : Visibility.Visible;
+        // Keep the recommended action first for both reading order and keyboard navigation.
+        var actions = (Panel)RuntimeRetryButton.Parent;
+        var primary = link == RuntimeLinkMode.Primary ? RuntimeDownloadButton : RuntimeRetryButton;
+        if (actions.Children[0] != primary)
+        {
+            actions.Children.Remove(primary);
+            actions.Children.Insert(0, primary);
+        }
+        RuntimeDownloadButton.Margin = link == RuntimeLinkMode.Primary ? new Thickness(0) : new Thickness(10, 0, 0, 0);
+        RuntimeRetryButton.Margin = link == RuntimeLinkMode.Primary ? new Thickness(10, 0, 0, 0) : new Thickness(0);
+        SourcePlaceholder.IsEnabled = false;
         RuntimeErrorPanel.Visibility = Visibility.Visible;
+        RefreshBrowserStateNote();
     }
 
     private void HideBrowserState()
     {
         RuntimeErrorPanel.Visibility = Visibility.Collapsed;
         RuntimeRetryButton.IsEnabled = true;
+        RuntimeRetryButton.ToolTip = RetryReadyTip;
+        SourcePlaceholder.IsEnabled = true;
+        RefreshBrowserStateNote();
+    }
+
+    /// <summary>
+    /// The panel's third line: what Retry (or the automatic restart) will pick up. The pending URL
+    /// is what the replacement core opens, so it wins; a queued return snapshot counts only while
+    /// that URL is its own video or there is no URL at all (ClearStalePendingReturnReplay drops it
+    /// otherwise). Hidden with the panel, and when nothing is queued.
+    /// </summary>
+    private void RefreshBrowserStateNote()
+    {
+        var note = QueuedWorkNote();
+        RuntimeErrorNote.Text = note ?? string.Empty;
+        RuntimeErrorNote.Visibility = note is not null && RuntimeErrorPanel.Visibility == Visibility.Visible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private string? QueuedWorkNote()
+    {
+        var pendingVideo = _pendingReturnReplay?.VideoId;
+        if (_pendingUrl is { } url)
+        {
+            var urlIsPendingVideo = pendingVideo is { Length: > 0 } &&
+                                    YouTubeUrlHelper.TryParse(url, out var target) &&
+                                    string.Equals(target.VideoId, pendingVideo, StringComparison.Ordinal);
+            return urlIsPendingVideo ? VideoWaitingNote : PageWaitingNote;
+        }
+        return _pendingReturnReplay is not null ? VideoWaitingNote : null;
     }
 
     private void DownloadRuntime_Click(object sender, RoutedEventArgs e) =>
@@ -374,7 +451,7 @@ public partial class MainWindow : Window
                 break;
             case WebViewRecoveryAction.GiveUp:
                 EndReloadSettle();
-                ShowRuntimeError(heading, message);
+                ShowRuntimeError(heading, message, RuntimeLinkMode.Secondary);
                 break;
         }
 
@@ -773,6 +850,7 @@ public partial class MainWindow : Window
             case IncomingLinkAction.QueueUntilReady:
                 _retainedIncomingTarget = null;
                 _pendingUrl = YouTubeUrlHelper.BuildWatchUrl(target!);
+                RefreshBrowserStateNote();
                 break;
             case IncomingLinkAction.NavigateSource:
                 _retainedIncomingTarget = null;
@@ -852,6 +930,7 @@ public partial class MainWindow : Window
         if (!_browserReady || Browser.CoreWebView2 is null)
         {
             _pendingUrl = input;
+            RefreshBrowserStateNote();
             return;
         }
 
@@ -908,11 +987,14 @@ public partial class MainWindow : Window
     private void SourceToolbar_SizeChanged(object sender, SizeChangedEventArgs e) =>
         ApplySourceToolbarLayout(e.NewSize.Width);
 
+    /// <summary>
+    /// Compact below the threshold: the transfer button drops its label. The label decision lives
+    /// in ApplyPopoutActionState so a state change and a resize agree whichever comes first.
+    /// </summary>
     internal void ApplySourceToolbarLayout(double width)
     {
-        var compact = width > 0 && width < CompactToolbarThreshold;
-        PopOutButtonText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        PopOutButtonIcon.Margin = compact ? new Thickness(0) : new Thickness(0, 0, 8, 0);
+        _compactToolbar = width > 0 && width < CompactToolbarThreshold;
+        UpdatePopoutActionState();
     }
 
     private void ProfileActionsButton_Click(object sender, RoutedEventArgs e)
@@ -1159,17 +1241,24 @@ public partial class MainWindow : Window
         var enabled = SourceCommandsAvailable;
         SourceNavigationGroup.IsEnabled = enabled;
         SourceProfileGroup.IsEnabled = enabled;
-        BackButton.IsEnabled = enabled;
-        ReloadButton.IsEnabled = enabled;
+        // Back and Reload call straight into the live core and do nothing without one; the address
+        // box, Home and profiles queue their navigation for the next core instead (spec 15.4), so
+        // they stay open through the failed state (polish review 2026-09-10 F-5).
+        BackButton.IsEnabled = enabled && _browserReady;
+        ReloadButton.IsEnabled = enabled && _browserReady;
         HomeButton.IsEnabled = enabled;
         UrlBox.IsEnabled = enabled;
         ProfilesCombo.IsEnabled = enabled;
         ProfileActionsButton.IsEnabled = enabled;
         SaveProfileMenuItem.IsEnabled = enabled;
 
-        var hasProfile = enabled && ProfilesCombo.SelectedItem is Profile;
+        var selected = ProfilesCombo.SelectedItem is Profile;
+        var hasProfile = enabled && selected;
         EditProfileMenuItem.IsEnabled = hasProfile;
         DeleteProfileMenuItem.IsEnabled = hasProfile;
+        // The two items are disabled for one reason a tooltip can name (polish review 2026-09-10 F-6).
+        EditProfileMenuItem.ToolTip = selected ? EditProfileTip : SelectProfileFirstTip;
+        DeleteProfileMenuItem.ToolTip = selected ? DeleteProfileTip : SelectProfileFirstTip;
         if (!enabled) ProfileActionsMenu.IsOpen = false;
         SettingsButton.IsEnabled = !_returnInProgress && !_privacyActionInProgress && !_mainWindowClosing;
     }
@@ -1213,8 +1302,8 @@ public partial class MainWindow : Window
         var existing = ProfileService.Find(_settings, name);
         if (existing is not null)
         {
-            if (!Prompt.AskConfirm(this, "Overwrite profile?",
-                    $"A profile named \"{name}\" already exists. Overwrite it?", "Overwrite"))
+            if (!Prompt.AskConfirm(this, ProfileService.OverwriteConfirmTitle, ProfileService.OverwriteOnSaveBody(name),
+                    ProfileService.OverwriteConfirmButton, ProfileService.OverwriteConfirmDanger))
             {
                 return;
             }
@@ -1254,9 +1343,10 @@ public partial class MainWindow : Window
         var outcome = ProfileService.Update(_settings, original.Name, updated);
         if (outcome == ProfileUpdateOutcome.NameConflict)
         {
-            // Same overwrite/rename prompt the Save path uses (spec 17: no silent clutter).
-            if (!Prompt.AskConfirm(this, "Overwrite profile?",
-                    $"A profile named \"{updated.Name}\" already exists. Overwrite it?", "Overwrite"))
+            // Same overwrite prompt family as the Save path (spec 17: no silent clutter), with the
+            // rename body: here the OTHER profile is discarded, not merely re-pointed.
+            if (!Prompt.AskConfirm(this, ProfileService.OverwriteConfirmTitle, ProfileService.OverwriteOnRenameBody(updated.Name),
+                    ProfileService.OverwriteConfirmButton, ProfileService.OverwriteConfirmDanger))
             {
                 return;
             }
@@ -1880,10 +1970,21 @@ public partial class MainWindow : Window
     private void SaveSettings()
     {
         var result = _settingsService.Save(_settings);
-        if (result != SettingsSaveResult.RefusedUnread || _settingsSaveRefusalShown) return;
-        _settingsSaveRefusalShown = true;
-        SettingsUnsavedHint.Visibility = Visibility.Visible;
-        Log.Warn("Settings changes are not being saved this session; the title-bar hint is shown once.");
+        if (result == SettingsSaveResult.RefusedUnread)
+        {
+            if (_settingsSaveRefusalShown) return;
+            _settingsSaveRefusalShown = true;
+            SettingsUnsavedHint.Visibility = Visibility.Visible;
+            Log.Warn("Settings changes are not being saved this session; the title-bar hint is shown once.");
+            return;
+        }
+        if (result != SettingsSaveResult.Saved || !_settingsSaveRefusalShown) return;
+        // A later save went through (a successful read or a reset lifted the refusal, spec 12.6):
+        // the hint would now be a false claim, and a fresh refusal must be able to signal again
+        // (polish review 2026-09-10 F-9).
+        _settingsSaveRefusalShown = false;
+        SettingsUnsavedHint.Visibility = Visibility.Collapsed;
+        Log.Info("Settings saves resumed; the title-bar hint is cleared.");
     }
 
     internal bool IsSettingsUnsavedHintVisibleForTests => SettingsUnsavedHint.Visibility == Visibility.Visible;
@@ -2082,7 +2183,7 @@ public partial class MainWindow : Window
                 await YouTubeDomBridge.ApplyPlaybackSettingsAsync(
                     core, launchState?.Volume, launchState?.Muted, launchState?.PlaybackRate);
             if (_sourceWasPlayingAtPopout && core is not null) await YouTubeDomBridge.PlayAsync(core);
-            Prompt.ShowInfo(this, "Pop out video", "PiPlay couldn't pop out this video. It stayed in the main window.");
+            Prompt.ShowInfo(this, "Pop out video", PopoutFailedBody);
         }
         finally
         {
@@ -2180,15 +2281,40 @@ public partial class MainWindow : Window
             PopoutActionState.Clearing => "Clearing browser data...",
             _ => "Pop out video",
         };
-        PopOutButtonIcon.Text = state is PopoutActionState.Ready or PopoutActionState.Clearing ? GlyphPopOut : GlyphBringBack;
-        PopOutButtonText.Text = label;
+        // Compact toolbar (polish review 2026-09-10 F-6): Ready and Open collapse to their glyph,
+        // but the two progress states keep a short label; a lone glyph cannot say "in progress".
+        var compactLabel = state switch
+        {
+            PopoutActionState.Returning => "Returning...",
+            PopoutActionState.Clearing => "Clearing...",
+            _ => null,
+        };
+        var showLabel = !_compactToolbar || compactLabel is not null;
+        PopOutButtonIcon.Text = state switch
+        {
+            PopoutActionState.Ready => GlyphPopOut,
+            PopoutActionState.Open => GlyphBringBack,
+            _ => GlyphTransition,
+        };
+        PopOutButtonIcon.Margin = showLabel ? new Thickness(0, 0, 8, 0) : new Thickness(0);
+        PopOutButtonText.Text = _compactToolbar && compactLabel is not null ? compactLabel : label;
+        PopOutButtonText.Visibility = showLabel ? Visibility.Visible : Visibility.Collapsed;
         System.Windows.Automation.AutomationProperties.SetName(PopOutButton, label);
+        PopOutButton.Style = (Style)FindResource(
+            state is PopoutActionState.Returning or PopoutActionState.Clearing ? "BusyButton" : "AccentButton");
+        // Bring video back stays enabled through a failure (it closes the Popout and queues the
+        // return, spec 14 / ADR-0010); the tooltip must not promise an instant return then (F-4).
+        var browserDown = _browserFailed || _browserRecoveryInProgress;
         PopOutButton.ToolTip = state switch
         {
-            PopoutActionState.Open => "Return playback to the Source Window",
+            PopoutActionState.Open => browserDown
+                ? "Return playback to the Source Window. The video waits there until the browser is back."
+                : "Return playback to the Source Window",
             PopoutActionState.Returning => "Returning playback to the Source Window",
             PopoutActionState.Clearing => "Pop out video is available after the browser-data clear finishes",
-            _ => "Pop out the current video",
+            _ => browserDown || !_browserReady
+                ? "Pop out video is available when the browser is ready"
+                : "Pop out the current video",
         };
         PopOutButton.IsEnabled = state switch
         {
@@ -2305,14 +2431,35 @@ public partial class MainWindow : Window
     {
         _browserReady = ready;
         UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
     }
+
+    /// <summary>Test-only: the terminal failed state as ShowRuntimeError leaves it (not ready, failed).</summary>
+    internal void SetBrowserFailedForTests(bool failed)
+    {
+        _browserFailed = failed;
+        if (failed) _browserReady = false;
+        UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
+    }
+
+    internal void NavigateForTests(string? input) => NavigateInternal(input);
+
+    /// <summary>Test-only: the failure panel's queued-work note, or null while it is hidden.</summary>
+    internal string? RuntimeErrorNoteForTests =>
+        RuntimeErrorNote.Visibility == Visibility.Visible ? RuntimeErrorNote.Text : null;
 
     internal bool BrowserReadyForTests => _browserReady;
     internal bool BrowserRecoveryInProgressForTests => _browserRecoveryInProgress;
     internal bool BrowserReloadInProgressForTests => _browserReloadInProgress;
     internal bool BrowserFailedForTests => _browserFailed;
     internal int ConsecutiveBrowserRecoveriesForTests => _consecutiveBrowserRecoveries;
-    internal void SetBrowserRecoveryInProgressForTests(bool inProgress) => _browserRecoveryInProgress = inProgress;
+    internal void SetBrowserRecoveryInProgressForTests(bool inProgress)
+    {
+        _browserRecoveryInProgress = inProgress;
+        UpdatePopoutActionState();
+        UpdateSourceCommandAvailability();
+    }
     internal WebView2 BrowserForTests => Browser;
     internal void ReplaceBrowserControlForTests() => ReplaceBrowserControl();
     internal Task RecreateSourceBrowserForTestsAsync() => RecreateSourceBrowserAsync("test");
@@ -2326,8 +2473,9 @@ public partial class MainWindow : Window
     internal string RuntimeErrorHeadingForTests => RuntimeErrorHeading.Text;
     internal bool IsRuntimeRetryEnabledForTests => RuntimeRetryButton.IsEnabled;
     internal void ReleaseBrowserStateAfterNavigationForTests() => ReleaseBrowserStateAfterNavigation();
-    internal void ShowBrowserStateForTests(string heading, string message, bool retryEnabled) =>
-        ShowBrowserState(heading, message, retryEnabled);
+    internal void ShowBrowserStateForTests(string heading, string message, bool retryEnabled,
+        RuntimeLinkMode link = RuntimeLinkMode.Hidden) =>
+        ShowBrowserState(heading, message, retryEnabled, link);
 
     private void StartSourceSuppressionGuard()
     {

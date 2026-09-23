@@ -73,7 +73,8 @@
                   Content="&#xE922;" Click="ExpandButton_Click" ToolTip="Expand popout"
                   AutomationProperties.Name="Expand or restore popout" />
           <Button x:Name="CloseButton" Style="{StaticResource CloseIconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
-                  Content="&#xE8BB;" Click="CloseButton_Click" ToolTip="Close popout (return video)"
+                  Content="&#xE8BB;" Click="CloseButton_Click"
+                  ToolTip="Bring video back to the Source Window and close the Popout"
                   AutomationProperties.Name="Close popout" />
         </StackPanel>
       </Grid>

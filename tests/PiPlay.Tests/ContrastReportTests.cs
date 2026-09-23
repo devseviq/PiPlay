@@ -28,9 +28,9 @@ public class ContrastReportTests
 
     [Theory]
     // --- Base pairs already proven by the shipping gates (kept so the report mirrors them) ---
-    [InlineData("#FFFFFF", "#E45D75", "white text on Danger (sharp/soft-glass rose)", 3.0)]
-    [InlineData("#FFFFFF", "#E8564C", "white text on Danger (minimal warm)", 3.0)]
-    [InlineData("#FF06141A", "#00D4FF", "dark button text on accent cyan (install default)", 4.5)]
+    [InlineData("#FF06141A", "#E45D75", "OnDanger dark text on Danger (sharp/soft-glass rose)", 4.5)]
+    [InlineData("#FF06141A", "#E8564C", "OnDanger dark text on Danger (minimal warm)", 4.5)]
+    [InlineData("#FF06141A", "#2BAED0", "dark button text on accent cyan (catalog default)", 4.5)]
     [InlineData("#FF06141A", "#4A8FAB", "dark button text on accent steel (dimmest chip)", 4.5)]
     // --- CON-1 candidate rows (Phase B): paste DERIVED tokens here to validate them BEFORE they ship.
     //     The Phase-B mixes (ThemeAccentProfile) do not exist in src yet, so these stay COMMENTED — a
@@ -57,9 +57,10 @@ public class ContrastReportTests
     [Fact]
     public void Report_agrees_with_the_shipping_gates()
     {
-        // (a) Published reference: white #FFFFFF on the sharp/soft-glass rose #E45D75 is 3.43:1
-        //     (ThemeCatalogTests white-on-Danger gate). Tolerance < 0.005 = the published 2-dp precision,
-        //     and avoids a banker's-rounding dependency on the exact tie.
+        // (a) Published reference: white #FFFFFF on the sharp/soft-glass rose #E45D75 is 3.43:1 (the
+        //     value that put white below the 4.5 text floor and moved DangerButton to OnDanger).
+        //     Tolerance < 0.005 = the published 2-dp precision, and avoids a banker's-rounding
+        //     dependency on the exact tie.
         var rose = Wcag.ContrastRatio("#FFFFFF", "#E45D75");
         Assert.True(System.Math.Abs(rose - 3.43) < 0.005,
             $"published reference white-on-#E45D75 should be 3.43:1, got {rose:F4}:1.");

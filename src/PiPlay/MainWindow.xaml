@@ -56,9 +56,11 @@
         <TextBlock x:Name="PinnedHint" Text="• Pinned" FontSize="12" Margin="10,0,0,0"
                    Foreground="{DynamicResource AccentPrimary}" VerticalAlignment="Center"
                    Visibility="Collapsed" />
+        <!-- Opted into hit testing (polish review 2026-09-10 F-9): the caption area swallows the
+             pointer otherwise, and the tooltip carries the only explanation and the way out. -->
         <TextBlock x:Name="SettingsUnsavedHint" Text="• Settings not saved" FontSize="12" Margin="10,0,0,0"
                    Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
-                   Visibility="Collapsed"
+                   Visibility="Collapsed" WindowChrome.IsHitTestVisibleInChrome="True"
                    ToolTip="PiPlay could not read its settings file when it started, so changes made this session are not saved. Reset app state in Settings starts over with defaults." />
       </StackPanel>
 
@@ -161,6 +163,8 @@
               </MenuItem>
               <MenuItem x:Name="EditProfileMenuItem" Style="{StaticResource DarkMenuItem}"
                         Header="_Edit selected profile" Click="EditProfileButton_Click" IsEnabled="False"
+                        ToolTip="Change the selected profile's name, link or playback settings"
+                        ToolTipService.ShowOnDisabled="True"
                         AutomationProperties.Name="Edit selected profile">
                 <MenuItem.Icon>
                   <TextBlock Text="&#xE70F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
@@ -168,6 +172,8 @@
               </MenuItem>
               <MenuItem x:Name="DeleteProfileMenuItem" Style="{StaticResource DarkMenuItem}"
                         Header="_Delete selected profile" Click="DeleteProfileButton_Click" IsEnabled="False"
+                        ToolTip="Remove the selected profile"
+                        ToolTipService.ShowOnDisabled="True"
                         AutomationProperties.Name="Delete selected profile">
                 <MenuItem.Icon>
                   <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
@@ -194,9 +200,11 @@
               Visibility="Collapsed" ToolTip="Show the existing Popout Player"
               AutomationProperties.Name="Show Popout Player" />
 
+      <!-- ShowOnDisabled (polish review 2026-09-10 F-6): the tooltip names the state that disables it. -->
       <Button x:Name="PopOutButton" Grid.Column="6" Style="{StaticResource AccentButton}"
               Margin="6,6,10,6" Click="PopOutButton_Click" IsEnabled="False"
-              ToolTip="Pop out the current video" AutomationProperties.Name="Pop out video">
+              ToolTip="Pop out the current video" ToolTipService.ShowOnDisabled="True"
+              AutomationProperties.Name="Pop out video">
         <StackPanel Orientation="Horizontal">
           <TextBlock x:Name="PopOutButtonIcon" Text="&#xE8A7;"
                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14"
@@ -267,19 +275,29 @@
         </StackPanel>
       </Border>
 
-      <!-- WebView2 runtime-missing / init-failure recovery panel (spec 15.4, Q-6). -->
+      <!-- WebView2 runtime-missing / init-failure / recovery panel (spec 15.4, Q-6, PP-02). The
+           code-behind decides which action leads and whether the download shows at all (polish
+           review 2026-09-10 F-3); the seeded styles are the runtime-missing arrangement. -->
       <Border x:Name="RuntimeErrorPanel" Background="{DynamicResource AppBackground}" Visibility="Collapsed">
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
           <TextBlock x:Name="RuntimeErrorHeading" Text="WebView2 Runtime is required" FontSize="20" FontWeight="SemiBold"
                      Foreground="{DynamicResource TextPrimary}" HorizontalAlignment="Center" />
           <TextBlock x:Name="RuntimeErrorText" TextWrapping="Wrap" TextAlignment="Center"
                      FontSize="13" Margin="0,12,0,0" Foreground="{DynamicResource TextSecondary}"
-                     Text="PiPlay needs the Microsoft Edge WebView2 Evergreen Runtime to display YouTube. Install it, then reopen PiPlay." />
+                     Text="PiPlay needs the Microsoft Edge WebView2 Evergreen Runtime to display YouTube. Install it, then click Retry." />
+          <!-- What Retry picks up (F-4): a queued return or navigation, otherwise hidden. -->
+          <TextBlock x:Name="RuntimeErrorNote" TextWrapping="Wrap" TextAlignment="Center"
+                     FontSize="13" Margin="0,10,0,0" Foreground="{DynamicResource TextPrimary}"
+                     Visibility="Collapsed" />
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
-            <Button Content="Get WebView2 Runtime" Style="{StaticResource AccentButton}"
-                    Click="DownloadRuntime_Click" />
+            <Button x:Name="RuntimeDownloadButton" Content="Get WebView2 Runtime" Style="{StaticResource AccentButton}"
+                    Click="DownloadRuntime_Click"
+                    ToolTip="Open the WebView2 Runtime download page in your default browser"
+                    AutomationProperties.Name="Get WebView2 Runtime" />
             <Button x:Name="RuntimeRetryButton" Content="Retry" Style="{StaticResource DarkButton}" Margin="10,0,0,0"
-                    Click="RetryRuntime_Click" />
+                    Click="RetryRuntime_Click"
+                    ToolTip="Start the browser component again" ToolTipService.ShowOnDisabled="True"
+                    AutomationProperties.Name="Retry starting the browser" />
           </StackPanel>
         </StackPanel>
       </Border>

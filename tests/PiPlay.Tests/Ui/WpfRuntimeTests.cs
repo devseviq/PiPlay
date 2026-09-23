@@ -84,7 +84,7 @@ public class WpfRuntimeTests : IDisposable
             string[] keys =
             [
                 "AccentPrimary", "AccentHover", "AccentPressed", "AccentBorder", "AccentShellTint",
-                "AccentChromeGlyph", "OnAccent", "OnAccentPressed", "AccentPrimaryLight",
+                "AccentChromeGlyph", "OnAccent", "OnAccentHover", "OnAccentPressed", "AccentPrimaryLight", "AccentCheckedWash",
             ];
             var before = keys
                 .SelectMany(key => new[] { key, key + "Color" })

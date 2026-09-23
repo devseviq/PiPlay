@@ -53,7 +53,16 @@
        hand-edit; take the value the derivation produces. -->
   <Color x:Key="AccentChromeGlyphColor">#FF2BAED0</Color>
   <Color x:Key="OnAccentColor">#FF06141A</Color>
+  <Color x:Key="OnAccentHoverColor">#FF06141A</Color>
   <Color x:Key="OnAccentPressedColor">#FF06141A</Color>
+  <!-- Danger-fill text, picked by contrast per preset like OnAccent (polish review 2026-09-10 F-1);
+       the seed is the sharp-dark derivation, pinned by XamlInvariantTests.Danger_button_text_reads_on_the_danger_fill. -->
+  <Color x:Key="OnDangerColor">#FF06141A</Color>
+  <Color x:Key="DangerHoverColor">#FFE77086</Color>
+  <!-- Checked-toggle wash: the presentation accent at ThemeColors.CheckedWashAlpha (polish review
+       2026-09-10 F-7). Replaced at runtime; the seed IS the derived default (same seed gate as above). -->
+  <Color x:Key="AccentCheckedWashColor">#2A2BAED0</Color>
+  <Color x:Key="AccentCheckedGlyphColor">#FF2BAED0</Color>
   <!-- Background room tones (docs/Theme_Preset_Differences.md) at the default accent intensity (50): the video
        letterbox and the washed window background. Same rule as the glyph seed above: the values
        ARE the derived defaults (pinned by the same XamlInvariantTests seed gate) — do not
@@ -92,7 +101,12 @@
   <SolidColorBrush x:Key="AccentShellTint" Color="{StaticResource AccentShellTintColor}" />
   <SolidColorBrush x:Key="AccentChromeGlyph" Color="{StaticResource AccentChromeGlyphColor}" />
   <SolidColorBrush x:Key="OnAccent" Color="{StaticResource OnAccentColor}" />
+  <SolidColorBrush x:Key="OnAccentHover" Color="{StaticResource OnAccentHoverColor}" />
+  <SolidColorBrush x:Key="DangerHover" Color="{StaticResource DangerHoverColor}" />
   <SolidColorBrush x:Key="OnAccentPressed" Color="{StaticResource OnAccentPressedColor}" />
+  <SolidColorBrush x:Key="OnDanger" Color="{StaticResource OnDangerColor}" />
+  <SolidColorBrush x:Key="AccentCheckedWash" Color="{StaticResource AccentCheckedWashColor}" />
+  <SolidColorBrush x:Key="AccentCheckedGlyph" Color="{StaticResource AccentCheckedGlyphColor}" />
   <SolidColorBrush x:Key="AccentLetterbox" Color="{StaticResource AccentLetterboxColor}" />
   <SolidColorBrush x:Key="AppBackgroundWash" Color="{StaticResource AppBackgroundWashColor}" />
   <SolidColorBrush x:Key="PopoutAccentEdge" Color="{StaticResource PopoutAccentEdgeColor}" />

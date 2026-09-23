@@ -168,14 +168,24 @@ internal static class Prompt
     /// <summary>Themed text-input dialog (used for naming a profile). Returns null if cancelled.</summary>
     public static string? AskText(Window owner, string title, string message, string initial = "")
     {
+        var parts = BuildAskText(owner, title, message, initial);
+        return parts.Window.ShowDialog() == true ? parts.Input.Text : null;
+    }
+
+    /// <summary>The text prompt's parts, for a WPF test that must not show the modal (polish review 2026-09-10 F-2).</summary>
+    internal sealed record TextPromptParts(Window Window, TextBox Input, Button Ok);
+
+    internal static TextPromptParts BuildAskText(Window? owner, string title, string message, string initial)
+    {
         var win = BuildShell(owner, title, out var body);
-        body.Children.Add(new TextBlock
+        var caption = new TextBlock
         {
             Text = message,
             Foreground = Brush("TextPrimary"),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 10),
-        });
+        };
+        body.Children.Add(caption);
 
         var box = new TextBox
         {
@@ -183,6 +193,7 @@ internal static class Prompt
             Style = Style("DarkTextBox"),
             Margin = new Thickness(0, 0, 0, 16),
         };
+        Label(box, caption);
         body.Children.Add(box);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -192,11 +203,26 @@ internal static class Prompt
         buttons.Children.Add(cancel);
         body.Children.Add(buttons);
 
-        string? result = null;
-        ok.Click += (_, _) => { result = box.Text; win.DialogResult = true; };
+        ok.Click += (_, _) => { win.DialogResult = true; };
         box.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        return new TextPromptParts(win, box, ok);
+    }
 
-        return win.ShowDialog() == true ? result : null;
+    private static TextBlock Caption(string text) => new()
+    {
+        Text = text,
+        Foreground = Brush("TextSecondary"),
+        Margin = new Thickness(0, 0, 0, 4),
+    };
+
+    /// <summary>
+    /// UIA: a code-built input has no accessible name of its own, so a screen reader announced a
+    /// bare "edit" (polish review 2026-09-10 F-2). Its visible caption is the label.
+    /// </summary>
+    private static void Label(FrameworkElement input, TextBlock caption)
+    {
+        System.Windows.Automation.AutomationProperties.SetLabeledBy(input, caption);
+        System.Windows.Automation.AutomationProperties.SetName(input, caption.Text);
     }
 
     /// <summary>
@@ -216,42 +242,50 @@ internal static class Prompt
         string? fallbackAccentColor = null, Action<string>? accentPreview = null,
         string? presentation = null)
     {
+        var parts = BuildEditProfile(owner, name, url, mode, accentColor, fallbackAccentColor, accentPreview, presentation);
+        return parts.Window.ShowDialog() == true ? parts.Result() : null;
+    }
+
+    /// <summary>The profile editor's parts, for a WPF test that must not show the modal (polish review 2026-09-10 F-2, A-3).</summary>
+    internal sealed record EditProfileParts(
+        Window Window, TextBox NameBox, TextBox UrlBox, TextBlock ModeCaption, FrameworkElement ModePicker,
+        FrameworkElement PresentationPicker, Button Ok,
+        Func<(string Name, string Url, string? Mode, string? Presentation, string? AccentColor)?> Result);
+
+    internal static EditProfileParts BuildEditProfile(
+        Window? owner, string name, string url, string? mode, string? accentColor = null,
+        string? fallbackAccentColor = null, Action<string>? accentPreview = null,
+        string? presentation = null)
+    {
         var win = BuildShell(owner, "Edit profile", out var body);
 
-        body.Children.Add(new TextBlock
-        {
-            Text = "Name",
-            Foreground = Brush("TextSecondary"),
-            Margin = new Thickness(0, 0, 0, 4),
-        });
+        var nameCaption = Caption("Name");
+        body.Children.Add(nameCaption);
         var nameBox = new TextBox { Text = name, Style = Style("DarkTextBox"), Margin = new Thickness(0, 0, 0, 12) };
+        Label(nameBox, nameCaption);
         body.Children.Add(nameBox);
 
-        body.Children.Add(new TextBlock
-        {
-            Text = "URL",
-            Foreground = Brush("TextSecondary"),
-            Margin = new Thickness(0, 0, 0, 4),
-        });
+        var urlCaption = Caption("URL");
+        body.Children.Add(urlCaption);
         var urlBox = new TextBox { Text = url, Style = Style("DarkTextBox"), Margin = new Thickness(0, 0, 0, 12) };
+        Label(urlBox, urlCaption);
         body.Children.Add(urlBox);
 
-        body.Children.Add(new TextBlock
-        {
-            Text = "Playback mode",
-            Foreground = Brush("TextSecondary"),
-            Margin = new Thickness(0, 0, 0, 4),
-        });
+        // Playback mode is hidden while Compact is dormant (polish review 2026-09-10 A-3, spec 10.2):
+        // two labels with one outcome. Saving preserves the incoming token while this row is hidden.
+        var modeVisibility = PlaybackModePolicy.CompactPlayerEnabled ? Visibility.Visible : Visibility.Collapsed;
+        var modeCaption = Caption("Playback mode");
+        modeCaption.Visibility = modeVisibility;
+        body.Children.Add(modeCaption);
         var (modePicker, selectedMode) = BuildModePicker(mode);
+        modePicker.Visibility = modeVisibility;
+        Label(modePicker, modeCaption);
         body.Children.Add(modePicker);
 
-        body.Children.Add(new TextBlock
-        {
-            Text = "Popout presentation",
-            Foreground = Brush("TextSecondary"),
-            Margin = new Thickness(0, 0, 0, 4),
-        });
+        var presentationCaption = Caption("Popout presentation");
+        body.Children.Add(presentationCaption);
         var (presentationPicker, selectedPresentation) = BuildPresentationPicker(presentation);
+        Label(presentationPicker, presentationCaption);
         body.Children.Add(presentationPicker);
 
         var useAccent = new CheckBox
@@ -342,12 +376,13 @@ internal static class Prompt
                 return;
             }
 
-            result = (trimmedName, urlBox.Text.Trim(), selectedMode(), selectedPresentation(), editedAccent);
+            var editedMode = modeVisibility == Visibility.Collapsed ? mode : selectedMode();
+            result = (trimmedName, urlBox.Text.Trim(), editedMode, selectedPresentation(), editedAccent);
             win.DialogResult = true;
         };
         nameBox.Loaded += (_, _) => { nameBox.Focus(); nameBox.SelectAll(); };
 
-        return win.ShowDialog() == true ? result : null;
+        return new EditProfileParts(win, nameBox, urlBox, modeCaption, modePicker, presentationPicker, ok, () => result);
     }
 
     internal static bool CanSaveProfileAccent(bool useProfileAccent, AccentColorPicker accentPicker) =>
@@ -359,6 +394,15 @@ internal static class Prompt
     /// styles the confirm button as destructive (red). The title-bar close acts as Cancel.
     /// </summary>
     public static bool AskConfirm(Window owner, string title, string message, string confirmText, bool danger = false)
+    {
+        var parts = BuildConfirm(owner, title, message, confirmText, danger);
+        return parts.Window.ShowDialog() == true;   // only the confirm button sets DialogResult true
+    }
+
+    /// <summary>The confirm dialog's parts, for a WPF test that must not show the modal (polish review 2026-09-10 F-8).</summary>
+    internal sealed record ConfirmParts(Window Window, Button Confirm, Button Cancel);
+
+    internal static ConfirmParts BuildConfirm(Window? owner, string title, string message, string confirmText, bool danger)
     {
         var win = BuildShell(owner, title, out var body);
         body.Children.Add(new TextBlock
@@ -376,11 +420,8 @@ internal static class Prompt
         buttons.Children.Add(cancel);
         body.Children.Add(buttons);
 
-        var result = false;
-        confirm.Click += (_, _) => { result = true; win.DialogResult = true; };
-
-        win.ShowDialog();
-        return result;
+        confirm.Click += (_, _) => { win.DialogResult = true; };
+        return new ConfirmParts(win, confirm, cancel);
     }
 
     /// <summary>Themed dark message dialog with a single OK button (done / not-ready / failed notices).</summary>

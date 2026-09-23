@@ -65,7 +65,18 @@ public static class ThemeResourceApplier
         // returns them to ordinary text color instead of leaving them stuck on the accent.
         SetColorPair(resources, "AccentChromeGlyph", set.ChromeGlyph);
         SetColorPair(resources, "OnAccent", set.OnAccent);
+        // Hover can cross the dark/white threshold just as pressed can.
+        SetColorPair(resources, "OnAccentHover", ThemeColors.PickReadableForeground(set.Hover));
         SetColorPair(resources, "OnAccentPressed", set.OnAccentPressed);
+        // Checked-toggle wash (polish review 2026-09-10 F-7): the accent at a fixed alpha, dial-independent.
+        SetColorPair(resources, "AccentCheckedWash", set.CheckedWash);
+        // A checked glyph sits above the wash, including over the lighter hover surface. Correct
+        // its ink against that composite rather than the unwashed surface used by ordinary icons.
+        var checkedHover = ThemeColors.Mix(ThemeColors.ParseColor(preset.Palette.SurfaceHover),
+            set.CheckedWash, set.CheckedWash.A / 255.0);
+        // WPF's premultiplied-byte composition can differ from the ideal blend by a channel step;
+        // retain a little headroom so the rendered glyph still clears the 3:1 non-text floor.
+        SetColorPair(resources, "AccentCheckedGlyph", ThemeColors.EnsureContrast(set.Primary, checkedHover, 3.1));
         // Keep AccentPrimaryLight defined as an alias to AccentHover for one migration pass.
         SetColorPair(resources, "AccentPrimaryLight", set.Hover);
         // Background room tones (docs/Theme_Preset_Differences.md): the letterbox framing the video and the
@@ -104,6 +115,11 @@ public static class ThemeResourceApplier
             // Keep the companion Color token in step for any direct color consumer.
             resources[PaletteBrushKeys[i] + "Color"] = color;
         }
+        // Danger-fill text follows the accent's readability policy per preset (polish review
+        // 2026-09-10 F-1): a derived pair, not a palette entry, so it never needs hand-tuning.
+        SetColorPair(resources, "OnDanger", ThemeColors.PickReadableForeground(ThemeColors.ParseColor(palette.Danger)));
+        // Brighten the fill instead of fading the entire button and its label.
+        SetColorPair(resources, "DangerHover", ThemeColors.Lighten(ThemeColors.ParseColor(palette.Danger), 0.12));
     }
 
     private static void ApplyRadii(ResourceDictionary resources, ThemeRadii radii)
