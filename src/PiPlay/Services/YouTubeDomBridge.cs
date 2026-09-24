@@ -795,8 +795,12 @@ public static class YouTubeDomBridge
     toggleClass(root, "is-ad", adActive);
     const length = media && Number.isFinite(media.duration) ? media.duration : 0;
     setDisabled(controls.progress, adActive || length <= 0);
+    // Hold the rail only while it is dragged or keyboard-focused; Chromium leaves a mouse-seeked
+    // range focused, and that focus alone must not freeze it.
+    const keyboardFocused = !!controls.progress && document.activeElement === controls.progress &&
+      controls.progress.matches(":focus-visible");
     if (media && !adActive && controls.progress &&
-        !controls.progress.matches(":active") && document.activeElement !== controls.progress) {
+        !controls.progress.matches(":active") && !keyboardFocused) {
       const ratio = length > 0 ? Math.max(0, Math.min(1, media.currentTime / length)) : 0;
       const value = String(Math.round(ratio * 1000));
       const fill = `${ratio * 100}%`;

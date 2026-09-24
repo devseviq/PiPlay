@@ -912,6 +912,28 @@ scenario("Focused controls fade after a mouse click but hold for keyboard focus"
   equal(pendingTimeoutDelays(environment).join(","), "250", "held controls must keep rechecking for idle");
 });
 
+scenario("Focused progress keeps tracking after a mouse seek but holds for keyboard focus", () => {
+  const environment = createEnvironment({ includeFocusedRoot: true });
+  const media = environment.document.media;
+  media.paused = false;
+  execute(environment, input.focusedScript);
+  authorizeFocused(environment);
+  const { controls, root } = environment.document.focused;
+
+  // Chromium leaves a mouse-seeked range focused; playback must still move the rail.
+  environment.document.focus(controls.seek);
+  controls.seek.value = "750";
+  root.emit("input", actionEvent(controls.seek, true));
+  media._currentTime = 96;
+  media.emit("timeupdate", { isTrusted: true, target: media });
+  equal(controls.seek.value, "800", "a mouse-focused rail must follow playback");
+
+  environment.document.focus(controls.seek, { keyboard: true });
+  media._currentTime = 108;
+  media.emit("timeupdate", { isTrusted: true, target: media });
+  equal(controls.seek.value, "800", "a keyboard-focused rail must not move under the user");
+});
+
 scenario("Focused mute action matches its label, including at volume zero", () => {
   const environment = createEnvironment({ includeFocusedRoot: true });
   const media = environment.document.media;
