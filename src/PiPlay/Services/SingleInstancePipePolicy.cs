@@ -7,6 +7,9 @@ internal static class SingleInstancePipePolicy
     private static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan ClientReadTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>Longest payload line the server keeps; a supported link is far shorter.</summary>
+    public const int MaxPayloadBytes = 8 * 1024;
+
     /// <summary>
     /// Match the <c>Local\</c> mutex boundary: each logon session gets its own primary and pipe,
     /// while repeated launches inside that session still rendezvous on one stable name.
@@ -29,17 +32,23 @@ internal static class SingleInstancePipePolicy
         return TimeSpan.FromMilliseconds(Math.Min(milliseconds, MaximumRetryDelay.TotalMilliseconds));
     }
 
-    public static Task<string> ReadClientPayloadAsync(
-        Func<CancellationToken, Task<string>> readAsync,
+    public static Task<T> ReadClientPayloadAsync<T>(
+        Func<CancellationToken, Task<T>> readAsync,
         CancellationToken cancellationToken) =>
         ReadClientPayloadAsync(readAsync, ClientReadTimeout, cancellationToken);
 
-    internal static Task<string> ReadClientPayloadAsync(
-        Func<CancellationToken, Task<string>> readAsync,
+    internal static Task<T> ReadClientPayloadAsync<T>(
+        Func<CancellationToken, Task<T>> readAsync,
         TimeSpan timeout,
         CancellationToken cancellationToken) =>
         AsyncOperationDeadline.RunAsync(readAsync, timeout, cancellationToken);
 
+    /// <summary>
+    /// Serve connections until shutdown. <paramref name="attemptAsync"/> serves one connection and
+    /// throws only for a server-side failure (the pipe could not be created or accept): a client
+    /// that stays silent or misbehaves is the attempt's own business and must not reach here, or
+    /// any local client could hold the listener in backoff.
+    /// </summary>
     public static async Task RunAsync(
         Func<CancellationToken, Task> attemptAsync,
         Func<TimeSpan, CancellationToken, Task> delayAsync,

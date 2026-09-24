@@ -285,7 +285,21 @@ public class SingleInstanceHandoffTests
             pipe,
             (payload, _) => { received.Add(payload); return Task.FromResult(ack); },
             (_, ex) => throw new InvalidOperationException("ack should be deliverable", ex),
+            ex => throw new InvalidOperationException("request should be usable", ex),
             token);
+
+    private static readonly TimeSpan ShortBound = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>One connection with short payload/answer bounds so misbehaving clients time out fast.</summary>
+    private static Task ServeBrieflyAsync(
+        string pipe, List<string> received, List<Exception> unusable, List<HandoffAck> undeliverable,
+        CancellationToken token) =>
+        SingleInstancePipeTransport.ServeOneAsync(
+            pipe,
+            (payload, _) => { lock (received) received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
+            (ack, _) => { lock (undeliverable) undeliverable.Add(ack); },
+            ex => { lock (unusable) unusable.Add(ex); },
+            ShortBound, ShortBound, token);
 
     [Fact]
     public async Task The_acknowledgement_round_trips_over_a_real_pipe()
@@ -314,6 +328,7 @@ public class SingleInstanceHandoffTests
             pipe,
             (payload, _) => { received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
             (ack, _) => undeliverable.Add(ack),
+            ex => throw new InvalidOperationException("request should be usable", ex),
             cts.Token);
 
         using (var client = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.Out))
@@ -357,6 +372,137 @@ public class SingleInstanceHandoffTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await Assert.ThrowsAsync<IOException>(() =>
             SingleInstancePipeTransport.ExchangeAsync(LoopbackPipeName(), "x", cts.Token));
+    }
+
+    // --- client misbehaviour is the connection's problem, never the server's (review 2026-09-24) ---
+
+    [Fact]
+    public async Task A_client_that_connects_and_never_writes_is_dropped_without_failing_the_server()
+    {
+        var pipe = LoopbackPipeName();
+        var received = new List<string>();
+        var unusable = new List<Exception>();
+        var undeliverable = new List<HandoffAck>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, cts.Token);
+
+        using var silent = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut);
+        await silent.ConnectAsync(2000, cts.Token);
+
+        // Returns normally: a thrown TimeoutException here is what used to push the listener into
+        // retry backoff (up to 30 s) for every silent connection.
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(received);
+        Assert.IsType<TimeoutException>(Assert.Single(unusable));
+        Assert.Empty(undeliverable);
+    }
+
+    [Fact]
+    public async Task A_silent_client_costs_the_listener_no_backoff_and_the_next_sender_is_served()
+    {
+        var pipe = LoopbackPipeName();
+        var received = new List<string>();
+        var dropped = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failures = new List<Exception>();
+        var delays = new List<TimeSpan>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var listener = SingleInstancePipePolicy.RunAsync(
+            attemptAsync: token => SingleInstancePipeTransport.ServeOneAsync(
+                pipe,
+                (payload, _) => { lock (received) received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
+                (_, ex) => throw new InvalidOperationException("ack should be deliverable", ex),
+                ex => dropped.TrySetResult(ex),
+                ShortBound, ShortBound, token),
+            delayAsync: (delay, token) => { lock (delays) delays.Add(delay); return Task.Delay(delay, token); },
+            onFirstFailure: ex => { lock (failures) failures.Add(ex); },
+            onRecovery: _ => { },
+            cts.Token);
+
+        using (var silent = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut))
+        {
+            await silent.ConnectAsync(2000, cts.Token);
+            Assert.IsType<TimeoutException>(await dropped.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            // The listener went straight back to accepting: the next sender is answered at once.
+            var line = await SingleInstancePipeTransport.ExchangeAsync(pipe, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", cts.Token);
+            Assert.Equal("accepted", line);
+        }
+
+        cts.Cancel();
+        await listener.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(new[] { "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }, received);
+        Assert.Empty(failures);
+        Assert.Empty(delays);
+    }
+
+    [Fact]
+    public async Task An_overlong_payload_is_answered_rejected_and_never_dispatched()
+    {
+        var pipe = LoopbackPipeName();
+        var received = new List<string>();
+        var unusable = new List<Exception>();
+        var undeliverable = new List<HandoffAck>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = SingleInstancePipeTransport.ServeOneAsync(
+            pipe,
+            (payload, _) => { received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
+            (ack, _) => undeliverable.Add(ack),
+            unusable.Add,
+            cts.Token);
+
+        // A valid link followed by padding: a truncated prefix would still parse, so nothing of an
+        // overlong line may reach the receiving decision.
+        var overlong = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&pad=" +
+            new string('a', SingleInstancePipePolicy.MaxPayloadBytes);
+        var line = await SingleInstancePipeTransport.ExchangeAsync(pipe, overlong, cts.Token);
+        await server;
+
+        Assert.Equal("rejected", line);
+        Assert.Empty(received);
+        Assert.IsType<InvalidDataException>(Assert.Single(unusable));
+        Assert.Empty(undeliverable);
+    }
+
+    [Fact]
+    public async Task A_sender_that_never_reads_or_hangs_up_cannot_stall_the_server()
+    {
+        var pipe = LoopbackPipeName();
+        var received = new List<string>();
+        var unusable = new List<Exception>();
+        var undeliverable = new List<HandoffAck>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, cts.Token);
+
+        using var mute = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut);
+        await mute.ConnectAsync(2000, cts.Token);
+        await mute.WriteAsync(System.Text.Encoding.UTF8.GetBytes("https://www.youtube.com/watch?v=dQw4w9WgXcQ\n"), cts.Token);
+
+        // The blocking WaitForPipeDrain this replaced never returned for a sender that stays
+        // connected without reading; the bounded wait lets the worker move on.
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(new[] { "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }, received);
+        Assert.Empty(unusable);
+        Assert.True(undeliverable.Count <= 1);   // a zero-quota pipe may time the write out instead
+    }
+
+    [Fact]
+    public async Task The_payload_line_is_bounded_and_framed_by_newline_or_eof()
+    {
+        static Task<string?> Read(byte[] bytes) =>
+            SingleInstancePipeTransport.ReadPayloadLineAsync(new MemoryStream(bytes), CancellationToken.None);
+        static byte[] Bytes(string text) => System.Text.Encoding.UTF8.GetBytes(text);
+
+        var atLimit = new string('a', SingleInstancePipePolicy.MaxPayloadBytes);
+        Assert.Equal(atLimit, await Read(Bytes(atLimit + "\n")));
+        Assert.Equal(atLimit, await Read(Bytes(atLimit)));                  // EOF closes a legacy line
+        Assert.Null(await Read(Bytes(atLimit + "a\n")));
+        Assert.Null(await Read(Bytes(atLimit + "a")));
+        Assert.Equal("https://youtu.be/dQw4w9WgXcQ", await Read(Bytes("https://youtu.be/dQw4w9WgXcQ\r\nextra")));
+        Assert.Equal(string.Empty, await Read(Array.Empty<byte>()));         // no link only activates
+        Assert.Equal("é", await Read(Bytes("é\n")));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using PiPlay.Models;
@@ -35,6 +36,7 @@ public sealed class SettingsService
 
     private readonly string _path;
     private readonly Func<string, string> _readAllText;
+    private readonly Action<string, string> _moveFile;
 
     // Process-wide because the settings file is shared: startup loads through one instance
     // while windows save through their own, and unread data must be protected across all of
@@ -45,10 +47,14 @@ public sealed class SettingsService
     /// <summary>The unread key: one full path, so relative and absolute spellings of a file share one flag.</summary>
     private readonly string _unreadKey;
 
-    public SettingsService(string? path = null, Func<string, string>? readAllText = null)
+    public SettingsService(
+        string? path = null,
+        Func<string, string>? readAllText = null,
+        Action<string, string>? moveFile = null)
     {
         _path = path ?? AppPaths.SettingsFile;
         _readAllText = readAllText ?? File.ReadAllText;
+        _moveFile = moveFile ?? ((source, destination) => File.Move(source, destination));
         _unreadKey = NormalizeKey(_path);
     }
 
@@ -190,8 +196,24 @@ public sealed class SettingsService
         {
             if (File.Exists(_path))
             {
-                var dest = $"{_path}.corrupt.{DateTime.Now:yyyyMMdd-HHmmss}.json";
-                File.Move(_path, dest);
+                var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                var dest = $"{_path}.corrupt.{stamp}.json";
+                try
+                {
+                    _moveFile(_path, dest);
+                }
+                catch (Exception moveFailure)
+                {
+                    // The file stays in place and the next save replaces it, so a rename that a lock
+                    // or ACL refuses must still leave a copy of the unparsed bytes aside.
+                    Log.Warn($"Could not move corrupt settings aside ({moveFailure.GetType().Name}); copying them instead.");
+                    File.Copy(_path, dest);
+                }
+
+                // Move and copy keep the corrupt file's old write time, which the 30-day cleanup
+                // reads as the quarantine's age: date it now so it is not deleted at the next launch.
+                try { File.SetLastWriteTimeUtc(dest, DateTime.UtcNow); }
+                catch (Exception ex) { Log.Error("Failed to date the settings quarantine.", ex); }
                 Log.Warn($"Quarantined corrupt settings to {Path.GetFileName(dest)}.");
             }
         }
@@ -208,7 +230,7 @@ public sealed class SettingsService
             var dir = Path.GetDirectoryName(_path)!;
             foreach (var f in Directory.EnumerateFiles(dir, "*.corrupt.*.json"))
             {
-                if (File.GetLastWriteTime(f) < DateTime.Now.AddDays(-30))
+                if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-30))
                     File.Delete(f);
             }
         }
@@ -258,6 +280,13 @@ public sealed class SettingsService
         if (s.SchemaVersion < AppSettings.CurrentSchemaVersion) s.SchemaVersion = AppSettings.CurrentSchemaVersion;
 
         s.Profiles.RemoveAll(p => p is null || string.IsNullOrWhiteSpace(p.Name));
+        // ProfileService matches names case-insensitively, so a later profile whose name differs
+        // only by case could never be selected, edited, or deleted on its own: every command would
+        // act on the first. Keep the first, as Find does.
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var shadowed = s.Profiles.RemoveAll(p => !names.Add(p.Name));
+        if (shadowed > 0)
+            Log.Warn($"Dropped {shadowed} profile(s) whose name repeats an earlier one (names ignore case).");
         // Repair the per-profile playback mode to the durable vocabulary (null/normal/compact),
         // folding the legacy "embed" alias to "compact" and unknown values to null (Phase 3).
         foreach (var p in s.Profiles)
@@ -272,9 +301,17 @@ public sealed class SettingsService
 
     private static bool HasThemeBlock(JsonElement root)
     {
-        return root.ValueKind == JsonValueKind.Object
-            && root.TryGetProperty("theme", out var theme)
-            && theme.ValueKind != JsonValueKind.Null;
+        if (root.ValueKind != JsonValueKind.Object) return false;
+
+        // Match the way the case-insensitive deserializer binds it (the last spelling wins): a
+        // hand-edited "Theme" block must not be mistaken for a legacy file and reseeded.
+        var hasTheme = false;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (string.Equals(property.Name, "theme", StringComparison.OrdinalIgnoreCase))
+                hasTheme = property.Value.ValueKind != JsonValueKind.Null;
+        }
+        return hasTheme;
     }
 
     private static double? NormalizeOptionalOpacity(double? value) =>

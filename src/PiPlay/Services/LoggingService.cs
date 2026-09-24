@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -19,7 +20,9 @@ namespace PiPlay.Services;
 /// many entries it dropped, so logging degrades visibly instead of stalling the app.
 ///
 /// The writer coalesces everything already queued into a single append, and tracks the file length
-/// in memory so the rotation check costs nothing per entry.
+/// in memory so the rotation check costs nothing per entry. The real length is re-read only when
+/// that count crosses the cap, because a second launch (which logs before it hands off) appends to
+/// and may already have rotated the same file.
 ///
 /// <see cref="Shutdown"/> drains the queue and must be called on the way out (App.OnExit) - without
 /// it, entries still in flight at process exit are lost.
@@ -115,7 +118,7 @@ public static class Log
         if (queue is null) return;
         try
         {
-            var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}{Environment.NewLine}";
+            var line = $"{Timestamp()} [{level}] {message}{Environment.NewLine}";
             if (!queue.TryAdd(new Entry { Text = line }))
                 Interlocked.Increment(ref _dropped);   // full: drop the line rather than stall the caller
         }
@@ -124,6 +127,11 @@ public static class Log
             // Racing Shutdown completes the queue mid-add. Logging must never throw (Q-6).
         }
     }
+
+    // Invariant culture: under the current one ':' is its time separator and yyyy follows its
+    // calendar (a Thai Buddhist or Hijri year), so the line shape would depend on regional settings.
+    private static string Timestamp() =>
+        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
 
     private static void DrainLoop(BlockingCollection<Entry> queue, string path)
     {
@@ -166,7 +174,7 @@ public static class Log
         if (dropped > 0)
         {
             // Surface the loss in the log itself; a silent gap would be worse than a slow one.
-            batch.Append($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [WARN] Log queue overflowed; " +
+            batch.Append($"{Timestamp()} [WARN] Log queue overflowed; " +
                          $"dropped {dropped} entr{(dropped == 1 ? "y" : "ies")}.{Environment.NewLine}");
         }
         if (batch.Length == 0) return;
@@ -190,6 +198,19 @@ public static class Log
     private static void RotateIfNeeded(string path)
     {
         if (_bytesOnDisk <= MaxBytes) return;
+
+        // The count only saw this process's appends. When another PiPlay process already rolled the
+        // file, rotating again on the stale count would replace the fresh .1 backup with a nearly
+        // empty log; carry on from the real length instead.
+        long actual;
+        try { actual = File.Exists(path) ? new FileInfo(path).Length : 0L; }
+        catch { actual = _bytesOnDisk; }   // cannot stat: trust the count
+        if (actual <= MaxBytes)
+        {
+            _bytesOnDisk = actual;
+            return;
+        }
+
         try
         {
             var backup = path + ".1";
