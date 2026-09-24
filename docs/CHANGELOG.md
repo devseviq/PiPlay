@@ -17,6 +17,10 @@
 - Typing an 11-letter word such as "programming" in the address box searches YouTube instead of opening a missing video. Playlist and live-stream embed links open the playlist or are ignored, instead of opening a video that does not exist.
 - Only Google's own sign-in domains open inside PiPlay. Look-alike domains open in your default browser.
 - PiPlay's ad check now reads the player that holds the video it writes to. A second, hidden YouTube player on the page can no longer make an ad look finished and let a seek or speed change through.
+- Only your own Windows account can hand a link to a running PiPlay or answer a second launch. A program that connects and stays silent no longer delays later links. An elevated and a non-elevated PiPlay no longer hand links to each other.
+- A settings file PiPlay cannot read keeps its quarantined copy for 30 days from when it was set aside. If it cannot be moved it is copied instead. Profiles whose names differ only in capitals no longer overwrite each other.
+- The log keeps its backup when a second launch writes to it, and its timestamps read the same in every Windows language.
+- A PiPlay that cannot open its single-instance lock shows the "already running" message instead of crashing at start.
 - Focused overlay: the controls fade again after you click one, and the progress bar keeps moving after a mouse seek. Next and Captions act only on the playing video's player. Unmute at volume 0 turns the sound back on. The first drag after clicking a control moves the Popout instead of pausing the video.
 
 ## 0.14.0-beta.1 — 2026-09-23 (build 40)

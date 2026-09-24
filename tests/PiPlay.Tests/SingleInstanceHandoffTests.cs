@@ -290,16 +290,20 @@ public class SingleInstanceHandoffTests
 
     private static readonly TimeSpan ShortBound = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>One connection with short payload/answer bounds so misbehaving clients time out fast.</summary>
+    // A bound a real sender's payload must always beat, even on a loaded CI runner: a short bound
+    // is only for the misbehaviour a test waits out, never for a write the test expects to land.
+    private static readonly TimeSpan PayloadBound = TimeSpan.FromSeconds(1);
+
+    /// <summary>One connection with a short answer bound so a sender that never reads times out fast.</summary>
     private static Task ServeBrieflyAsync(
         string pipe, List<string> received, List<Exception> unusable, List<HandoffAck> undeliverable,
-        CancellationToken token) =>
+        TimeSpan payloadTimeout, CancellationToken token) =>
         SingleInstancePipeTransport.ServeOneAsync(
             pipe,
             (payload, _) => { lock (received) received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
             (ack, _) => { lock (undeliverable) undeliverable.Add(ack); },
             ex => { lock (unusable) unusable.Add(ex); },
-            ShortBound, ShortBound, token);
+            payloadTimeout, ShortBound, token);
 
     [Fact]
     public async Task The_acknowledgement_round_trips_over_a_real_pipe()
@@ -384,7 +388,7 @@ public class SingleInstanceHandoffTests
         var unusable = new List<Exception>();
         var undeliverable = new List<HandoffAck>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, cts.Token);
+        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, ShortBound, cts.Token);
 
         using var silent = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut);
         await silent.ConnectAsync(2000, cts.Token);
@@ -413,7 +417,7 @@ public class SingleInstanceHandoffTests
                 (payload, _) => { lock (received) received.Add(payload); return Task.FromResult(HandoffAck.Accepted); },
                 (_, ex) => throw new InvalidOperationException("ack should be deliverable", ex),
                 ex => dropped.TrySetResult(ex),
-                ShortBound, ShortBound, token),
+                PayloadBound, ShortBound, token),
             delayAsync: (delay, token) => { lock (delays) delays.Add(delay); return Task.Delay(delay, token); },
             onFirstFailure: ex => { lock (failures) failures.Add(ex); },
             onRecovery: _ => { },
@@ -473,7 +477,7 @@ public class SingleInstanceHandoffTests
         var unusable = new List<Exception>();
         var undeliverable = new List<HandoffAck>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, cts.Token);
+        var server = ServeBrieflyAsync(pipe, received, unusable, undeliverable, PayloadBound, cts.Token);
 
         using var mute = new System.IO.Pipes.NamedPipeClientStream(".", pipe, System.IO.Pipes.PipeDirection.InOut);
         await mute.ConnectAsync(2000, cts.Token);
