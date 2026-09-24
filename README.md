@@ -35,7 +35,7 @@ These shortcuts work while the video has keyboard focus. YouTube's own keys also
 
 ## Try the beta
 
-Download the ZIP and matching `.sha256` file for the newest prerelease (currently **0.14.0-beta.1**) from [GitHub Releases](https://github.com/devseviq/PiPlay/releases). The build is unsigned.
+Download the ZIP and matching `.sha256` file for the newest prerelease (currently **0.14.0-beta.2**) from [GitHub Releases](https://github.com/devseviq/PiPlay/releases). The build is unsigned.
 
 1. Install what the release needs: Windows x64, the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0), the [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), and [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows), which the package check uses.
 2. Follow the download and verification commands in the release notes. They confirm the ZIP is the one GitHub published.

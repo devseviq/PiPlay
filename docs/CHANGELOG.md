@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.14.0-beta.2 — 2026-09-24 (build 41)
+
+Test prerelease for feedback. Requires Windows x64, the .NET 10 Desktop Runtime, and WebView2 Evergreen; PowerShell 7 is needed for package verification. See the README for setup and known limitations.
+
 - Keyboard shortcuts work while the video has focus. In the main window, Ctrl+Shift+P pops the video out or brings it back, and Ctrl+T pins the window. In the Popout, F11 expands or restores, Ctrl+T pins, Ctrl+W or Ctrl+Shift+P brings the video back, and Esc restores an expanded Popout. Holding a key acts once, and tooltips name the shortcut.
 - Double-click the Popout's top bar to expand or restore it. Right-click the top bar to park the Popout in a screen corner, to size it for Small, Medium, or Large 16:9 video, or to reach Expand, Pin, and Bring video back.
 - The Popout's window title shows the video's name, so the taskbar and Alt+Tab say what is playing.
