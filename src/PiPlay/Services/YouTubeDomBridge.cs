@@ -451,6 +451,9 @@ public static class YouTubeDomBridge
   window.addEventListener("click", event => {
     if (!suppressClick) return;
     clearSuppression();
+    // Only the drag's own release click is swallowed. The native move loop can eat that click, so
+    // a keyboard or programmatic activation (detail 0) clears the leftover flag and goes through.
+    if (event.detail === 0) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);

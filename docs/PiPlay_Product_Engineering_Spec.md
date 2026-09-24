@@ -39,7 +39,7 @@ Source and Popout Pin values are independent. Source Pin is suspended while the 
 
 ### 7.1 Controls fade
 
-Pointer, keyboard, focus, pause, and movement recovery apply to the Popout chrome; the strip never becomes a second input mode. Keyboard focus on a strip control holds the strip up like the pointer does. A mouse click on Pin, Fade, or Expand hands keyboard focus back to the page so Space reaches YouTube; a keyboard press keeps focus on the control. (`PlayerWindow.xaml.cs`.)
+Pointer, keyboard, focus, pause, and movement recovery apply to the Popout chrome; the strip never becomes a second input mode. A keyboard user's focus on a strip control holds the strip up like the pointer does; focus left behind by a mouse click does not. A mouse click on Settings, Pin, Fade, or Expand hands keyboard focus back to the page so Space reaches YouTube; a keyboard press keeps focus on the control. (`PlayerWindow.xaml.cs`.)
 
 ### 7.2 Chrome auto-hide
 
@@ -84,7 +84,7 @@ Standard is default. Focused overlay: [`YouTube_Compliance.md`](YouTube_Complian
 
 ## 11. Runtime coordination
 
-One WPF dispatcher owns native/window state. Launch, return, navigation, and page calls are generation- or single-flight-guarded. Normal Popout DOM sync `250 ms`; Source suppression `1 s`; normal-page DOM execution `5 s`; connected single-instance client pipe payload `2 s` and `8 KiB`; hand-off UI dispatch `5 s`, acknowledgement wait `3 s`, replacement mutex election `3 s`, pipe worker shutdown wait `2 s`. A hand-off client that stays silent past the payload bound or breaks the pipe is dropped unanswered, and a payload line over that size is answered `rejected` without reaching the Source; neither counts as a pipe server failure or starts its retry backoff. After answering, the server waits at most the acknowledgement bound for the sender to hang up instead of blocking on a pipe drain. Shutdown stops accepting hand-offs, waits for the pipe worker, drains the log, then releases the session mutex. Timers stop on close/navigation. (`MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`, `YouTubeDomBridge`, `SingleInstancePipePolicy`, `SingleInstanceHandoffPolicy`, `RuntimeFailurePolicyTests`, `SingleInstanceHandoffTests`.)
+One WPF dispatcher owns native/window state. Launch, return, navigation, and page calls are generation- or single-flight-guarded. Normal Popout DOM sync `250 ms`; Source suppression `1 s`; normal-page DOM execution `5 s`; connected single-instance client pipe payload `2 s` and `8 KiB`; hand-off UI dispatch `5 s`, acknowledgement wait `3 s`, replacement mutex election `3 s`, pipe worker shutdown wait `2 s`. A hand-off client that stays silent past the payload bound, or whose read fails with an I/O error, is dropped unanswered; one that hangs up before a newline is served its text so far as a legacy line (an empty line only activates the Source); and a payload line over that size is answered `rejected` without reaching the Source; none of these counts as a pipe server failure or starts its retry backoff. After answering, the server waits at most the acknowledgement bound for the sender to hang up instead of blocking on a pipe drain. Shutdown stops accepting hand-offs, waits for the pipe worker, drains the log, then releases the session mutex. Timers stop on close/navigation. (`MainWindow.xaml.cs`, `PlayerWindow.xaml.cs`, `YouTubeDomBridge`, `SingleInstancePipePolicy`, `SingleInstanceHandoffPolicy`, `RuntimeFailurePolicyTests`, `SingleInstanceHandoffTests`.)
 
 ## 12. Component contracts
 
@@ -178,7 +178,7 @@ The Popout's drag-handle context menu parks a floating Popout in a corner of its
 
 ## 17. Profiles and appearance ownership
 
-Profiles contain a name, URL, optional mode/presentation/accent/Pin/Fade values, and placement. Non-null profile fields override global values; unset fields inherit. Names compare case-insensitively: duplicate names prompt overwrite/rename, and a loaded file keeps only the first profile per name. URLs validate, and broken values fail gracefully. (`ProfileService`, `SettingsService`, `ProfileServiceTests`, `SettingsServiceTests`.)
+Profiles contain a name, URL, optional mode/presentation/accent/Pin/Fade values, and placement. Non-null profile fields override global values; unset fields inherit. Names compare case-insensitively: duplicate names prompt overwrite/rename, and a loaded file keeps the first profile per name and renames each later one to the first free `Name (n)`, so no profile is dropped. URLs validate, and broken values fail gracefully. (`ProfileService`, `SettingsService`, `ProfileServiceTests`, `SettingsServiceTests`.)
 
 ## 18. Logging
 

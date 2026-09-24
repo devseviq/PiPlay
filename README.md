@@ -82,7 +82,7 @@ pwsh -NoProfile -File .\scripts\Test-LocalCI.ps1   # restore, Debug tests, Relea
 dotnet run --project src\PiPlay                     # Default channel, data in %LOCALAPPDATA%\PiPlay
 ```
 
-`PiPlay.exe --help` (or `-h`, `/?`) prints command-line usage. To contribute, branch from `main`, run the local gate, and open a pull request. The required check is `Build and test (Windows)`.
+`PiPlay.exe --help` (or `-h`, `/?`) shows command-line usage in a dialog and exits. To contribute, branch from `main`, run the local gate, and open a pull request. The required check is `Build and test (Windows)`.
 
 | Document | Owns |
 |---|---|

@@ -23,6 +23,16 @@ internal static class KeyboardShortcutInput
         };
     }
 
+    // The mapped keys a held chord can still repeat into a newly active window.
+    private static readonly (Key Wpf, ShortcutKey Shortcut)[] ToggleKeys =
+    {
+        (Key.P, ShortcutKey.P), (Key.T, ShortcutKey.T), (Key.W, ShortcutKey.W), (Key.F11, ShortcutKey.F11),
+    };
+
+    /// <summary>The mapped keys physically held right now, read from the keyboard state.</summary>
+    public static IEnumerable<ShortcutKey> HeldKeys() =>
+        ToggleKeys.Where(k => Keyboard.IsKeyDown(k.Wpf)).Select(k => k.Shortcut).ToArray();
+
     public static ShortcutModifiers Translate(ModifierKeys modifiers)
     {
         var result = ShortcutModifiers.None;

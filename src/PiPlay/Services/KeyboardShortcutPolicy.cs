@@ -76,12 +76,28 @@ public static class KeyboardShortcutPolicy
         _ => PopoutShortcut.None,
     };
 
+    /// <summary>
+    /// The Source toggle a window that just became active must treat as already pressed: the
+    /// chord that moved playback here is often still held, and its auto-repeat must not move it
+    /// straight back. Only toggles count; focusing the address box again is harmless.
+    /// </summary>
+    public static SourceShortcut HeldToggleForSource(IEnumerable<ShortcutKey> heldKeys, ShortcutModifiers modifiers) =>
+        heldKeys.Select(key => ForSource(key, modifiers))
+            .FirstOrDefault(s => s is SourceShortcut.ToggleVideoPopout or SourceShortcut.TogglePin);
+
+    /// <summary>The Popout counterpart of <see cref="HeldToggleForSource"/>; Esc restore is idempotent.</summary>
+    public static PopoutShortcut HeldToggleForPopout(IEnumerable<ShortcutKey> heldKeys, ShortcutModifiers modifiers) =>
+        heldKeys.Select(key => ForPopout(key, modifiers))
+            .FirstOrDefault(s => s is PopoutShortcut.ToggleExpand or PopoutShortcut.TogglePin or PopoutShortcut.BringVideoBack);
+
     /// <summary>Appends a gesture hint to a tooltip, e.g. "Pin on top (Ctrl+T)".</summary>
     public static string WithGesture(string text, string gesture) => $"{text} ({gesture})";
 }
 
 /// <summary>
-/// Makes one physical press act once. Keys forwarded from a focused WebView2 always report
+/// Makes one physical press act once. A window that becomes active while a shortcut's keys are
+/// still held latches that shortcut first, so a press that moved playback between windows is not
+/// repeated by the other window. Keys forwarded from a focused WebView2 always report
 /// <c>IsRepeat == false</c>, so holding F11 or Ctrl+T would otherwise flip a toggle on every
 /// auto-repeat. A shortcut is latched when it acts and released by the next key-up the window
 /// hears or by losing activation; releasing either the letter or Ctrl reaches the window as an

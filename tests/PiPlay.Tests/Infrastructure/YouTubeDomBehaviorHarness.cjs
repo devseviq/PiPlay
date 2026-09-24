@@ -769,6 +769,33 @@ scenario("passive drag survives a page control losing focus and clears only on w
   equal(environment.messages.length, 1, "window blur must still cancel an armed drag");
 });
 
+scenario("drag click suppression never swallows a keyboard activation", () => {
+  const environment = createEnvironment();
+  execute(environment, input.passiveScript);
+  authorizePassive(environment);
+  const target = environment.document.media;
+  const player = environment.document.player;
+  const control = new FakeElement("button");
+  environment.document.body.appendChild(control);
+
+  // The native move loop eats the drag's button-up, so no release click clears the suppression.
+  environment.window.emit("pointerdown", pointerEvent(target, player));
+  environment.window.emit("pointermove", pointerEvent(target, player, { clientX: 20 }));
+  equal(environment.messages.length, 1, "drag must post");
+  // Tab to a control and press Enter: Chromium reports keyboard activation with detail 0.
+  environment.window.emit("blur", { target: control });
+  const keyboardClick = { ...actionEvent(control, true), detail: 0 };
+  environment.window.emit("click", keyboardClick);
+  equal(keyboardClick.defaultPrevented, false, "a keyboard activation must reach the page");
+
+  // The stale suppression is gone, and a fresh drag's release click is still eaten.
+  environment.window.emit("pointerdown", pointerEvent(target, player));
+  environment.window.emit("pointermove", pointerEvent(target, player, { clientX: 20 }));
+  const release = { ...actionEvent(target, true), detail: 1 };
+  environment.window.emit("click", release);
+  equal(release.defaultPrevented, true, "the drag release click must still be suppressed");
+});
+
 scenario("Focused surface rejects synthetic media and native actions", () => {
   const environment = createEnvironment({ includeFocusedRoot: true });
   execute(environment, input.focusedScript);

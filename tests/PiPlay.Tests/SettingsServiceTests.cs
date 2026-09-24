@@ -350,22 +350,28 @@ public class SettingsServiceTests : IDisposable
     }
 
     [Fact]
-    public void Profiles_whose_names_differ_only_by_case_keep_the_first()
+    public void Profiles_whose_names_differ_only_by_case_are_kept_under_distinct_names()
     {
         // ProfileService finds by name ignoring case, so the second "LO-FI" could never be selected,
-        // edited, or deleted: every command acted on the first.
+        // edited, or deleted: every command acted on the first. Dropping it would delete it at the
+        // next save; it is renamed instead, past any name already in use.
         File.WriteAllText(_path,
             "{\"profiles\":[" +
             "{\"name\":\"Lo-fi\",\"url\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}," +
             "{\"name\":\"LO-FI\",\"url\":\"https://www.youtube.com/watch?v=y6120QOlsfU\"}," +
+            "{\"name\":\"lo-fi\",\"url\":\"https://www.youtube.com/watch?v=aqz-KE-bpKQ\"}," +
+            "{\"name\":\"lo-fi (2)\",\"url\":\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"}," +
             "{\"name\":\"Jazz\",\"url\":\"https://www.youtube.com/watch?v=y6120QOlsfU\"}]}");
 
         var loaded = new SettingsService(_path).Load();
 
-        Assert.Equal(new[] { "Lo-fi", "Jazz" }, loaded.Profiles.Select(p => p.Name));
+        Assert.Equal(new[] { "Lo-fi", "LO-FI (3)", "lo-fi (4)", "lo-fi (2)", "Jazz" }, loaded.Profiles.Select(p => p.Name));
         Assert.Equal("https://www.youtube.com/watch?v=dQw4w9WgXcQ", ProfileService.Find(loaded, "LO-FI")!.Url);
+        Assert.Equal("https://www.youtube.com/watch?v=y6120QOlsfU", ProfileService.Find(loaded, "lo-fi (3)")!.Url);
+        Assert.Equal("https://www.youtube.com/watch?v=jNQXAC9IVRw", ProfileService.Find(loaded, "LO-FI (2)")!.Url);
         Assert.True(ProfileService.Remove(loaded, "lo-fi"));
         Assert.False(ProfileService.Exists(loaded, "Lo-fi"));   // no shadowed twin resurfaces
+        Assert.Equal(4, loaded.Profiles.Count);
     }
 
     [Fact]

@@ -20,10 +20,12 @@ internal static class SingleInstancePipeTransport
     /// Accept one connection, read the payload line (bounded by the client read timeout and
     /// <see cref="SingleInstancePipePolicy.MaxPayloadBytes"/>; a legacy client that writes without a
     /// newline and closes still yields its text at EOF), dispatch it, and answer with the
-    /// acknowledgement line. A sender that stays silent or breaks the pipe is dropped unanswered, and
-    /// an overlong line is answered Rejected without being dispatched; either way this returns
-    /// normally, because a misbehaving client is not a server failure and must not push the
-    /// listener into retry backoff.
+    /// acknowledgement line. A sender that stays silent past the bound, or whose read fails with an
+    /// I/O error, is dropped unanswered; one that hangs up before a newline is served its text up to
+    /// that point as a legacy line (an empty line only activates), and the answer it can no longer
+    /// read is reported undeliverable. An overlong line is answered Rejected without being
+    /// dispatched. Every case returns normally, because a misbehaving client is not a server
+    /// failure and must not push the listener into retry backoff.
     /// </summary>
     public static Task ServeOneAsync(
         string pipeName,

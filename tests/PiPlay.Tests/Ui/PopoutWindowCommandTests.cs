@@ -33,6 +33,37 @@ public class PopoutWindowCommandTests
         });
 
     [Fact]
+    public void A_chord_held_when_the_popout_activates_does_not_act_until_released() =>
+        StaTestThread.Invoke(() =>
+        {
+            // A chord still down when the window activates (Ctrl+Shift+P after a pop out; Ctrl+T
+            // here, because its effect is synchronous) must not act on its forwarded auto-repeat,
+            // which WebView2 reports with IsRepeat false.
+            var w = NewPlayer();
+            w.LatchHeldShortcut(PopoutShortcut.TogglePin);
+
+            Assert.True(w.HandleShortcut(PopoutShortcut.TogglePin, isRepeat: false));   // swallowed
+            Assert.False(w.Topmost);
+
+            w.ReleaseShortcutForTests();   // the key-up
+            Assert.True(w.HandleShortcut(PopoutShortcut.TogglePin, isRepeat: false));
+            Assert.True(w.Topmost);
+        });
+
+    [Fact]
+    public void The_source_treats_a_held_pop_out_chord_as_already_pressed() =>
+        StaTestThread.Invoke(() =>
+        {
+            // Bring video back via Ctrl+Shift+P reactivates the Source with the chord still down.
+            var source = new MainWindow();
+            source.LatchHeldShortcut(SourceShortcut.ToggleVideoPopout);
+
+            Assert.False(source.TryBeginShortcutForTests(SourceShortcut.ToggleVideoPopout));
+            Assert.True(source.TryBeginShortcutForTests(SourceShortcut.TogglePin));   // a different chord still acts
+            source.Close();
+        });
+
+    [Fact]
     public void Escape_is_consumed_only_when_it_restores() =>
         StaTestThread.Invoke(() =>
         {

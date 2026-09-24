@@ -174,6 +174,10 @@ public partial class MainWindow : Window
         Closing += MainWindow_Closing;
         // A key-up can be lost while another window has focus; never keep a shortcut latched.
         Deactivated += (_, _) => _shortcutGate.Release();
+        // Ctrl+Shift+P that brought the video back is usually still held when the Source
+        // reactivates: its auto-repeat must not pop the video straight out again.
+        Activated += (_, _) => LatchHeldShortcut(KeyboardShortcutPolicy.HeldToggleForSource(
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
         StateChanged += (_, _) =>
             MaximizeButton.Content = WindowState == WindowState.Maximized ? GlyphRestore : GlyphMaximize;
         SourceInitialized += (_, _) =>
@@ -1026,6 +1030,14 @@ public partial class MainWindow : Window
     }
 
     private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) => _shortcutGate.Release();
+
+    internal void LatchHeldShortcut(SourceShortcut held)
+    {
+        if (held != SourceShortcut.None) _shortcutGate.TryBegin(held, isRepeat: false);
+    }
+
+    /// <summary>Test seam: whether a Source shortcut would act now (and latch it if so).</summary>
+    internal bool TryBeginShortcutForTests(SourceShortcut shortcut) => _shortcutGate.TryBegin(shortcut, isRepeat: false);
 
     private void SourceToolbar_SizeChanged(object sender, SizeChangedEventArgs e) =>
         ApplySourceToolbarLayout(e.NewSize.Width);

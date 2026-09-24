@@ -53,6 +53,32 @@ public class KeyboardShortcutPolicyTests
         Assert.Equal(PopoutShortcut.None, KeyboardShortcutPolicy.ForPopout(key, modifiers));
 
     [Fact]
+    public void A_chord_still_held_across_the_hand_over_is_latched_in_the_window_that_receives_it()
+    {
+        // Ctrl+Shift+P popped the video out; the Popout activates with the chord still down.
+        Assert.Equal(PopoutShortcut.BringVideoBack,
+            KeyboardShortcutPolicy.HeldToggleForPopout(new[] { ShortcutKey.P }, CtrlShift));
+        // ...and brought it back; the Source reactivates with the chord still down.
+        Assert.Equal(SourceShortcut.ToggleVideoPopout,
+            KeyboardShortcutPolicy.HeldToggleForSource(new[] { ShortcutKey.P }, CtrlShift));
+        Assert.Equal(PopoutShortcut.ToggleExpand,
+            KeyboardShortcutPolicy.HeldToggleForPopout(new[] { ShortcutKey.F11 }, ShortcutModifiers.None));
+        Assert.Equal(SourceShortcut.TogglePin,
+            KeyboardShortcutPolicy.HeldToggleForSource(new[] { ShortcutKey.T }, Ctrl));
+    }
+
+    [Theory]
+    [InlineData(ShortcutModifiers.None)]            // plain P is YouTube's, not a chord
+    [InlineData(ShortcutModifiers.Shift)]
+    [InlineData(ShortcutModifiers.Control)]
+    public void Keys_held_without_their_chord_latch_nothing(ShortcutModifiers modifiers)
+    {
+        Assert.Equal(PopoutShortcut.None, KeyboardShortcutPolicy.HeldToggleForPopout(new[] { ShortcutKey.P }, modifiers));
+        Assert.Equal(SourceShortcut.None, KeyboardShortcutPolicy.HeldToggleForSource(new[] { ShortcutKey.P }, modifiers));
+        Assert.Equal(PopoutShortcut.None, KeyboardShortcutPolicy.HeldToggleForPopout(Array.Empty<ShortcutKey>(), CtrlShift));
+    }
+
+    [Fact]
     public void Gesture_hint_follows_the_label()
     {
         Assert.Equal("Pin popout on top (Ctrl+T)",

@@ -150,19 +150,18 @@ public static class PlacementMath
     }
 
     /// <summary>
-    /// Resize a floating window to <paramref name="videoWidthPx"/> wide with a 16:9 video area,
-    /// adding the vertical chrome (<paramref name="chromeHeightPx"/>) and frame
-    /// (<paramref name="frameThicknessPx"/> on every side) the video does not use. The anchor
-    /// corner nearest the work-area corner stays put, so a Popout parked bottom-right grows up
-    /// and left; the result is clamped into <paramref name="work"/>.
+    /// Resize a floating window so its page area is <paramref name="videoWidthPx"/> wide and 16:9.
+    /// <paramref name="chromeWidthPx"/> and <paramref name="chromeHeightPx"/> are the TOTAL window
+    /// space the page does not get on each axis (frame, resize band, and top bar), as measured
+    /// from the live layout. The anchor corner nearest the work-area corner stays put, so a Popout
+    /// parked bottom-right grows up and left; the result is clamped into <paramref name="work"/>.
     /// </summary>
     public static RectI ResizeToVideoWidth(
-        RectI window, RectI work, int videoWidthPx, int chromeHeightPx, int frameThicknessPx)
+        RectI window, RectI work, int videoWidthPx, int chromeWidthPx, int chromeHeightPx)
     {
-        var frame = Math.Max(0, frameThicknessPx);
         var videoWidth = Math.Max(1, videoWidthPx);
-        var width = videoWidth + 2 * frame;
-        var height = (int)Math.Round(videoWidth * 9.0 / 16.0) + Math.Max(0, chromeHeightPx) + 2 * frame;
+        var width = videoWidth + Math.Max(0, chromeWidthPx);
+        var height = (int)Math.Round(videoWidth * 9.0 / 16.0) + Math.Max(0, chromeHeightPx);
 
         var anchorRight = window.Left + window.Width / 2 > work.Left + work.Width / 2;
         var anchorBottom = window.Top + window.Height / 2 > work.Top + work.Height / 2;

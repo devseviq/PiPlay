@@ -236,6 +236,10 @@ public partial class PlayerWindow : Window
         };
         // A key-up can be lost while another window has focus; never keep a shortcut latched.
         Deactivated += (_, _) => _shortcutGate.Release();
+        // Ctrl+Shift+P that popped the video out is usually still held when the Popout activates:
+        // its auto-repeat must not bring the video straight back.
+        Activated += (_, _) => LatchHeldShortcut(KeyboardShortcutPolicy.HeldToggleForPopout(
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
         Closing += PlayerWindow_Closing;
         Closed += PlayerWindow_Closed;
     }
@@ -999,7 +1003,11 @@ public partial class PlayerWindow : Window
     /// </summary>
     private void ReturnFocusToVideoAfterMouseClick()
     {
-        if (InputManager.Current.MostRecentInputDevice is not MouseDevice) return;
+        if (InputManager.Current.MostRecentInputDevice is MouseDevice) ReturnFocusToVideo();
+    }
+
+    private void ReturnFocusToVideo()
+    {
         if (_closing || Player.CoreWebView2 is null) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
         {
@@ -1063,9 +1071,9 @@ public partial class PlayerWindow : Window
             PlacementMath.ResizeToVideoWidth(
                 window,
                 work,
-                (int)Math.Round(videoWidthDip * scale),
-                (int)Math.Round(chromeWidthDip * scale),
-                (int)Math.Round(chromeHeightDip * scale)));
+                videoWidthPx: (int)Math.Round(videoWidthDip * scale),
+                chromeWidthPx: (int)Math.Round(chromeWidthDip * scale),
+                chromeHeightPx: (int)Math.Round(chromeHeightDip * scale)));
         OnUserActivity();
     }
 
@@ -1200,6 +1208,11 @@ public partial class PlayerWindow : Window
         return ExecuteShortcut(shortcut);
     }
 
+    internal void LatchHeldShortcut(PopoutShortcut held)
+    {
+        if (held != PopoutShortcut.None) _shortcutGate.TryBegin(held, isRepeat: false);
+    }
+
     /// <summary>The shared action path for a shortcut and its arrange-menu item.</summary>
     private bool ExecuteShortcut(PopoutShortcut shortcut)
     {
@@ -1251,8 +1264,14 @@ public partial class PlayerWindow : Window
 
     // --- Controls fade (spec 7.1) ---
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e) =>
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read the device before the modal Settings opens: afterwards it reflects how the dialog
+        // was dismissed, and WPF has already restored focus to this button.
+        var byMouse = InputManager.Current.MostRecentInputDevice is MouseDevice;
         SettingsRequested?.Invoke(this, EventArgs.Empty);
+        if (byMouse) ReturnFocusToVideo();
+    }
 
     private void FadeToggle_Click(object sender, RoutedEventArgs e)
     {
@@ -1370,8 +1389,10 @@ public partial class PlayerWindow : Window
             return;
         }
         // Keyboard focus on a strip control holds the strip up like the pointer does (spec 7.1):
-        // fading a focused Pin or Close would leave Space pressing an invisible button.
-        var stripHasAttention = ChromeStrip.IsMouseOver || ChromeStrip.IsKeyboardFocusWithin;
+        // fading a focused Pin or Close would leave Space pressing an invisible button. Only a
+        // keyboard user's focus counts; focus a mouse click left behind never holds the strip.
+        var stripHasAttention = ChromeStrip.IsMouseOver ||
+            (ChromeStrip.IsKeyboardFocusWithin && InputManager.Current.MostRecentInputDevice is KeyboardDevice);
         if (FadePolicy.ShouldHide(_fadeEnabled, stripHasAttention, _isDragging, idleElapsed: true))
         {
             HideControls();

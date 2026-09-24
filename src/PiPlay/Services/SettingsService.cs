@@ -282,11 +282,24 @@ public sealed class SettingsService
         s.Profiles.RemoveAll(p => p is null || string.IsNullOrWhiteSpace(p.Name));
         // ProfileService matches names case-insensitively, so a later profile whose name differs
         // only by case could never be selected, edited, or deleted on its own: every command would
-        // act on the first. Keep the first, as Find does.
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var shadowed = s.Profiles.RemoveAll(p => !names.Add(p.Name));
-        if (shadowed > 0)
-            Log.Warn($"Dropped {shadowed} profile(s) whose name repeats an earlier one (names ignore case).");
+        // act on the first. The first keeps its name, as Find does; a later one is renamed
+        // "Name (2)" rather than dropped, so a save never deletes a profile the user made.
+        var allNames = new HashSet<string>(s.Profiles.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var renamed = 0;
+        foreach (var p in s.Profiles)
+        {
+            if (taken.Add(p.Name)) continue;
+            var suffix = 2;
+            string candidate;
+            do candidate = $"{p.Name} ({suffix++})";
+            while (taken.Contains(candidate) || allNames.Contains(candidate));
+            p.Name = candidate;
+            taken.Add(candidate);
+            renamed++;
+        }
+        if (renamed > 0)
+            Log.Warn($"Renamed {renamed} profile(s) whose name repeats an earlier one (names ignore case).");
         // Repair the per-profile playback mode to the durable vocabulary (null/normal/compact),
         // folding the legacy "embed" alias to "compact" and unknown values to null (Phase 3).
         foreach (var p in s.Profiles)

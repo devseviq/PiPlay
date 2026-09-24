@@ -61,13 +61,29 @@ public class PlacementArrangeTests
     [Fact]
     public void Size_preset_gives_the_video_area_sixteen_by_nine()
     {
-        // 640 px video + 1 px frame each side; 360 px video + 44 px strip + 2 px frame.
+        // Totals, not per-side values: 1 px frame each side horizontally; 44 px strip + 2 px frame.
         var sized = PlacementMath.ResizeToVideoWidth(
-            new RectI(2000, 100, 2480, 372), Work, videoWidthPx: 640, chromeHeightPx: 44, frameThicknessPx: 1);
+            new RectI(2000, 100, 2480, 372), Work, videoWidthPx: 640, chromeWidthPx: 2, chromeHeightPx: 46);
 
         Assert.Equal(642, sized.Width);
-        Assert.Equal(360 + 44 + 2, sized.Height);
+        Assert.Equal(360 + 46, sized.Height);
         Assert.Equal(new RectI(2000, 100, 2642, 506), sized);   // top-left quadrant: grows right/down
+    }
+
+    [Theory]
+    // The Popout's real layout totals (PlayerWindow.xaml): 1 DIP accent edge + 12 DIP resize band
+    // left/right/bottom, plus the 44 DIP strip when it stays up or the Focused 12 DIP top band.
+    [InlineData(480, 26, 58)]   // Standard, strip visible
+    [InlineData(640, 26, 14)]   // strip auto-hide: the steady state has no strip
+    [InlineData(960, 26, 26)]   // Focused inset on all four sides
+    public void Size_presets_leave_exactly_a_sixteen_by_nine_page_for_the_real_chrome(
+        int videoWidth, int chromeWidth, int chromeHeight)
+    {
+        var sized = PlacementMath.ResizeToVideoWidth(
+            new RectI(2000, 100, 2480, 372), Work, videoWidth, chromeWidth, chromeHeight);
+
+        Assert.Equal(videoWidth, sized.Width - chromeWidth);
+        Assert.Equal((int)Math.Round(videoWidth * 9.0 / 16.0), sized.Height - chromeHeight);
     }
 
     [Fact]
@@ -75,7 +91,7 @@ public class PlacementArrangeTests
     {
         var parked = PlacementMath.AlignToCorner(Window, Work, ScreenCorner.BottomRight, marginPx: 24);
 
-        var sized = PlacementMath.ResizeToVideoWidth(parked, Work, videoWidthPx: 960, chromeHeightPx: 0, frameThicknessPx: 1);
+        var sized = PlacementMath.ResizeToVideoWidth(parked, Work, videoWidthPx: 960, chromeWidthPx: 2, chromeHeightPx: 2);
 
         Assert.Equal(parked.Right, sized.Right);
         Assert.Equal(parked.Bottom, sized.Bottom);
@@ -87,7 +103,7 @@ public class PlacementArrangeTests
     public void Size_preset_is_clamped_into_the_work_area()
     {
         var sized = PlacementMath.ResizeToVideoWidth(
-            new RectI(3500, 800, 3800, 1000), Work, videoWidthPx: 4000, chromeHeightPx: 44, frameThicknessPx: 1);
+            new RectI(3500, 800, 3800, 1000), Work, videoWidthPx: 4000, chromeWidthPx: 26, chromeHeightPx: 58);
 
         Assert.True(sized.Left >= Work.Left && sized.Right <= Work.Right);
         Assert.True(sized.Top >= Work.Top && sized.Bottom <= Work.Bottom);
