@@ -501,6 +501,7 @@ public class SingleInstanceHandoffTests
 
         var atLimit = new string('a', SingleInstancePipePolicy.MaxPayloadBytes);
         Assert.Equal(atLimit, await Read(Bytes(atLimit + "\n")));
+        Assert.Equal(atLimit, await Read(Bytes(atLimit + "\r\n")));           // the CR is framing, not payload
         Assert.Equal(atLimit, await Read(Bytes(atLimit)));                  // EOF closes a legacy line
         Assert.Null(await Read(Bytes(atLimit + "a\n")));
         Assert.Null(await Read(Bytes(atLimit + "a")));

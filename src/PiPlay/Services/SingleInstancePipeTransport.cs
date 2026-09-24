@@ -167,7 +167,9 @@ internal static class SingleInstancePipeTransport
     {
         ArgumentNullException.ThrowIfNull(stream);
 
-        var line = new byte[SingleInstancePipePolicy.MaxPayloadBytes];
+        // One spare byte so a line exactly at the limit may still end in CRLF: the CR is framing,
+        // stripped below, and never counts against the payload.
+        var line = new byte[SingleInstancePipePolicy.MaxPayloadBytes + 1];
         var chunk = new byte[1024];
         var length = 0;
         var overlong = false;
@@ -191,8 +193,8 @@ internal static class SingleInstancePipeTransport
             if (newline >= 0) break;
         }
 
-        if (overlong) return null;
         if (length > 0 && line[length - 1] == (byte)'\r') length--;
+        if (overlong || length > SingleInstancePipePolicy.MaxPayloadBytes) return null;
         return Encoding.UTF8.GetString(line, 0, length);
     }
 

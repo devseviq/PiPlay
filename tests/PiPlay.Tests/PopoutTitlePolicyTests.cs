@@ -26,6 +26,8 @@ public class PopoutTitlePolicyTests
     [InlineData("   ")]
     [InlineData("YouTube")]
     [InlineData("(2) YouTube")]
+    [InlineData("YouTube Music")]
+    [InlineData("(1) YouTube Music")]
     public void Pages_without_a_video_title_keep_the_generic_title(string? documentTitle) =>
         Assert.Equal(PopoutTitlePolicy.FallbackTitle, PopoutTitlePolicy.Format(documentTitle, WatchUrl));
 

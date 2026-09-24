@@ -47,7 +47,7 @@ public static class YouTubeUrlHelper
         // /embed/live_stream?channel=... a channel's live stream, never video ids.
         if (segments.Length >= 2 &&
             (segments[0] is "embed" or "shorts" or "v" or "live") && IsVideoId(segments[1]) &&
-            !IsReservedPathKeyword(segments[1]))
+            !(segments[0] == "embed" && IsReservedEmbedKeyword(segments[1])))
         {
             target.VideoId = segments[1];
         }
@@ -154,7 +154,7 @@ public static class YouTubeUrlHelper
 
     public static bool IsVideoId(string? id) => id is not null && VideoIdRegex.IsMatch(id);
 
-    private static bool IsReservedPathKeyword(string segment) =>
+    private static bool IsReservedEmbedKeyword(string segment) =>
         segment is "videoseries" or "live_stream";
 
     /// <summary>

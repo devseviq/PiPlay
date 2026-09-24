@@ -29,8 +29,10 @@ public static partial class PopoutTitlePolicy
         title = NotificationCountPrefix().Replace(title, string.Empty);
         title = SiteSuffix().Replace(title, string.Empty).Trim();
 
-        // A bare "YouTube" (home, loading, player-shell pages) says nothing about the video.
-        if (title.Length == 0 || title.Equals("YouTube", StringComparison.OrdinalIgnoreCase))
+        // A bare site name (home, loading, player-shell pages) says nothing about the video.
+        if (title.Length == 0
+            || title.Equals("YouTube", StringComparison.OrdinalIgnoreCase)
+            || title.Equals("YouTube Music", StringComparison.OrdinalIgnoreCase))
             return FallbackTitle;
 
         if (title.Length > MaxVideoTitleLength)
