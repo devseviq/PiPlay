@@ -135,6 +135,7 @@ class FakeElement extends EventHub {
     this._connected = false;
     this.clickCount = 0;
     this.pointerCaptureId = null;
+    this.focusVisible = false;
 
     for (const [name, value] of Object.entries(options.attributes || {})) {
       this.setAttribute(name, value);
@@ -178,6 +179,15 @@ class FakeElement extends EventHub {
     return child;
   }
 
+  insertBefore(child, reference) {
+    const index = this.children.indexOf(reference);
+    if (index < 0) return this.appendChild(child);
+    child.parentNode = this;
+    this.children.splice(index, 0, child);
+    if (this.isConnected) child.connect();
+    return child;
+  }
+
   removeChild(child) {
     this.children = this.children.filter(candidate => candidate !== child);
     child.parentNode = null;
@@ -208,12 +218,28 @@ class FakeElement extends EventHub {
     return String(selectorList).split(",").some(selector => this.matchesOne(selector.trim()));
   }
 
+  // Descendant combinators match right to left against real ancestors, so document order and
+  // scoping behave like the browser rather than returning fixed answers for known strings.
   matchesOne(selector) {
+    const parts = String(selector).trim().split(/\s+/);
+    if (!this.matchesCompound(parts.pop())) return false;
+    let ancestor = this.parentNode;
+    while (parts.length) {
+      const part = parts.pop();
+      while (ancestor && !ancestor.matchesCompound(part)) ancestor = ancestor.parentNode;
+      if (!ancestor) return false;
+      ancestor = ancestor.parentNode;
+    }
+    return true;
+  }
+
+  matchesCompound(selector) {
+    if (selector === ":focus-visible") return this.focusVisible === true;
     if (!selector || selector === ":active" || selector.endsWith(":hover")) return false;
 
     const notAttribute = selector.match(/^(.*):not\(\[([^=]+)=['"]([^'"]+)['"]\]\)$/);
     if (notAttribute) {
-      return this.matchesOne(notAttribute[1]) && this.getAttribute(notAttribute[2]) !== notAttribute[3];
+      return this.matchesCompound(notAttribute[1]) && this.getAttribute(notAttribute[2]) !== notAttribute[3];
     }
 
     const attribute = selector.match(/^\[([^=\]]+)(?:=['"]?([^'"\]]+)['"]?)?\]$/);
@@ -377,18 +403,38 @@ class FakeDocument extends EventHub {
   }
 
   querySelector(selector) {
-    if (selector === "#movie_player,.html5-video-player")
-      return this.player && this.player.isConnected ? this.player : null;
-    if (selector === "#movie_player video.html5-main-video,video.html5-main-video,video") return this.media;
-    if (selector === ".ytp-subtitles-button") return this.nativeCaptions;
-    if (selector === ".ytp-next-button") return this.nativeNext;
-    if (selector === ".ytp-next-button:not([aria-disabled='true'])") {
-      return this.nativeNext && this.nativeNext.getAttribute("aria-disabled") !== "true"
-        ? this.nativeNext
-        : null;
-    }
     return querySelectorWithin(this.documentElement, selector);
   }
+
+  // Chromium focuses a clicked button too; only keyboard focus matches :focus-visible.
+  focus(element, { keyboard = false } = {}) {
+    if (this.activeElement) this.activeElement.focusVisible = false;
+    this.activeElement = element;
+    if (element) element.focusVisible = keyboard;
+  }
+}
+
+// A second YouTube player (for example a hidden preview) with its own video and native controls.
+function buildDecoyPlayer({ adClass = null } = {}) {
+  const player = new FakeElement("div", { classes: ["html5-video-player"] });
+  if (adClass) player.classList.add(adClass);
+  player.hidden = true;
+  const media = new FakeMediaElement();
+  const nativeCaptions = new FakeElement("button", { classes: ["ytp-subtitles-button"] });
+  nativeCaptions.setAttribute("aria-pressed", "false");
+  const nativeNext = new FakeElement("button", { classes: ["ytp-next-button"] });
+  nativeNext.setAttribute("aria-disabled", "false");
+  player.appendChild(media);
+  player.appendChild(nativeCaptions);
+  player.appendChild(nativeNext);
+  return { player, media, nativeCaptions, nativeNext };
+}
+
+function insertDecoyFirst(environment, options) {
+  const decoy = buildDecoyPlayer(options);
+  const body = environment.document.body;
+  body.insertBefore(decoy.player, body.children[0]);
+  return decoy;
 }
 
 class FakeMutationObserver {
@@ -484,6 +530,19 @@ function createEnvironment(options = {}) {
 
 function execute(environment, script) {
   return vm.runInContext(script, environment.context, { timeout: 1000 });
+}
+
+// Advance one round of pending timeouts; anything they reschedule stays pending.
+function runTimeouts(environment) {
+  for (const [id, timer] of [...environment.timers]) {
+    if (timer.interval) continue;
+    environment.timers.delete(id);
+    timer.callback();
+  }
+}
+
+function pendingTimeoutDelays(environment) {
+  return [...environment.timers.values()].filter(timer => !timer.interval).map(timer => timer.delay);
 }
 
 function pointerEvent(target, player, overrides = {}) {
@@ -685,6 +744,31 @@ scenario("passive drag document-token rotation clears an armed stale gesture", (
     "new document gesture must carry only the replacement token");
 });
 
+scenario("passive drag survives a page control losing focus and clears only on window blur", () => {
+  const environment = createEnvironment();
+  execute(environment, input.passiveScript);
+  authorizePassive(environment);
+  const target = environment.document.media;
+  const player = environment.document.player;
+  const control = new FakeElement("button");
+  environment.document.body.appendChild(control);
+
+  // Pressing the video moves focus off the control clicked before it; that blur is not the window's.
+  environment.window.emit("pointerdown", pointerEvent(target, player));
+  environment.window.emit("blur", { target: control });
+  environment.window.emit("pointermove", pointerEvent(target, player, { clientX: 20 }));
+  equal(environment.messages.length, 1, "an element blur must not cancel an armed drag");
+  environment.window.emit("blur", { target: control });
+  const release = actionEvent(target, true);
+  environment.window.emit("click", release);
+  equal(release.defaultPrevented, true, "an element blur must not let the drag release reach the video");
+
+  environment.window.emit("pointerdown", pointerEvent(target, player));
+  environment.window.emit("blur", { target: environment.window });
+  environment.window.emit("pointermove", pointerEvent(target, player, { clientX: 20 }));
+  equal(environment.messages.length, 1, "window blur must still cancel an armed drag");
+});
+
 scenario("Focused surface rejects synthetic media and native actions", () => {
   const environment = createEnvironment({ includeFocusedRoot: true });
   execute(environment, input.focusedScript);
@@ -778,6 +862,79 @@ scenario("Focused selector failure withdraws harmlessly and reports inactive", (
     "selector failure must not leave the active fallback interval running");
 });
 
+scenario("Focused binds #movie_player and never reads an earlier player's ad state or native controls", () => {
+  const environment = createEnvironment({ includeFocusedRoot: true, adClass: "ad-showing" });
+  const decoy = insertDecoyFirst(environment);
+  execute(environment, input.focusedScript);
+  authorizeFocused(environment);
+  const { controls, root } = environment.document.focused;
+  const media = environment.document.media;
+  const nativeNext = environment.document.nativeNext;
+
+  assert(root.classList.contains("is-ad"), "#movie_player's ad must place the overlay in ad posture");
+  equal(controls.next.disabled, true, "#movie_player's ad must disable custom Next");
+  controls.seek.value = "900";
+  root.emit("input", actionEvent(controls.seek, true));
+  root.emit("click", actionEvent(controls.next, true));
+  equal(media.currentTimeWrites + decoy.media.currentTimeWrites, 0,
+    "an earlier clear player must not unlock seek during an ad");
+  equal(nativeNext.clickCount + decoy.nativeNext.clickCount, 0,
+    "an earlier clear player must not unlock Next during an ad");
+
+  root.emit("click", actionEvent(controls.captions, true));
+  equal(environment.document.nativeCaptions.clickCount, 1, "Captions must use #movie_player's native control");
+  equal(decoy.nativeCaptions.clickCount, 0, "Captions must never click another player's control");
+
+  environment.document.player.classList.remove("ad-showing");
+  root.emit("click", actionEvent(controls.next, true));
+  equal(nativeNext.clickCount, 1, "clear Next must use #movie_player's native control");
+  equal(decoy.nativeNext.clickCount, 0, "Next must never click another player's control");
+});
+
+scenario("Focused controls fade after a mouse click but hold for keyboard focus", () => {
+  const environment = createEnvironment({ includeFocusedRoot: true });
+  environment.document.media.paused = false;
+  execute(environment, input.focusedScript);
+  authorizeFocused(environment);
+  const { controls, root } = environment.document.focused;
+
+  // Chromium also focuses a clicked button; that mouse focus must not hold the controls forever.
+  environment.document.focus(controls.captions);
+  root.emit("click", actionEvent(controls.captions, true));
+  runTimeouts(environment);
+  assert(!root.classList.contains("is-visible"), "controls must fade after a mouse click");
+
+  environment.document.focus(controls.captions, { keyboard: true });
+  root.emit("focusin", actionEvent(controls.captions, true));
+  assert(root.classList.contains("is-visible"), "keyboard focus must reveal the controls");
+  runTimeouts(environment);
+  assert(root.classList.contains("is-visible"), "keyboard focus must hold the controls");
+  equal(pendingTimeoutDelays(environment).join(","), "250", "held controls must keep rechecking for idle");
+});
+
+scenario("Focused mute action matches its label, including at volume zero", () => {
+  const environment = createEnvironment({ includeFocusedRoot: true });
+  const media = environment.document.media;
+  media.volume = 0;
+  execute(environment, input.focusedScript);
+  authorizeFocused(environment);
+  const { controls, root } = environment.document.focused;
+
+  equal(controls.mute.getAttribute("aria-label"), "Unmute", "volume zero must read as muted");
+  root.emit("click", actionEvent(controls.mute, true));
+  equal(media.muted, false, "Unmute at volume zero must leave the video unmuted");
+  assert(media.volume > 0, "Unmute at volume zero must restore an audible volume");
+  equal(controls.mute.getAttribute("aria-label"), "Mute", "an audible video must offer Mute");
+
+  const audibleVolume = media.volume;
+  root.emit("click", actionEvent(controls.mute, true));
+  equal(media.muted, true, "Mute must mute");
+  equal(controls.mute.getAttribute("aria-label"), "Unmute", "a muted video must offer Unmute");
+  root.emit("click", actionEvent(controls.mute, true));
+  equal(media.muted, false, "Unmute must unmute");
+  equal(media.volume, audibleVolume, "Unmute must keep an audible volume unchanged");
+});
+
 scenario("ad-state probe classifies clear, both ad classes, missing player, and stale documents", () => {
   for (const posture of adPostures()) {
     equal(execute(posture.environment, input.adStateProbeScript), posture.probe,
@@ -840,6 +997,62 @@ scenario("host playback settings always set volume and mute but playbackRate onl
     equal(media.playbackRate, posture.seeks ? 1.75 : 1,
       `${posture.name} playback-settings final playbackRate`);
   }
+});
+
+scenario("host ad-state guard reads the player that contains the target video", () => {
+  const adBehindClearDecoy = createEnvironment({ adClass: "ad-showing" });
+  const clearDecoy = insertDecoyFirst(adBehindClearDecoy);
+  const adMedia = adBehindClearDecoy.document.media;
+  equal(execute(adBehindClearDecoy, input.adStateProbeScript), "ad",
+    "an earlier clear player must not mask #movie_player's ad");
+  execute(adBehindClearDecoy, input.seekScript);
+  execute(adBehindClearDecoy, input.playbackSettingsScript);
+  equal(adMedia.currentTimeWrites, 0, "seek must not write the video under an ad");
+  equal(adMedia.playbackRateWrites, 0, "playback settings must not change the rate under an ad");
+  equal(clearDecoy.media.currentTimeWrites + clearDecoy.media.playbackRateWrites, 0,
+    "host writers must target only the spec 26.3 video");
+
+  const clearBehindAdDecoy = createEnvironment();
+  insertDecoyFirst(clearBehindAdDecoy, { adClass: "ad-showing" });
+  equal(execute(clearBehindAdDecoy, input.adStateProbeScript), "clear",
+    "another player's ad must not block the target video");
+  execute(clearBehindAdDecoy, input.seekScript);
+  equal(clearBehindAdDecoy.document.media.currentTime, 95, "a clear target video must seek");
+});
+
+// Runs after the document-created scripts, as a page script would.
+const pageInterceptionScript = `(() => {
+  window.__leaked = [];
+  const pageStringify = JSON.stringify;
+  JSON.stringify = function (value) { window.__leaked.push(value); return pageStringify.apply(this, arguments); };
+  const webview = window.chrome.webview;
+  const pagePost = webview.postMessage;
+  webview.postMessage = function (message) { window.__leaked.push(message); return pagePost.apply(this, arguments); };
+  Object.defineProperty(Object.prototype, "toJSON", {
+    configurable: true, get() { window.__leaked.push(this); return undefined; } });
+})()`;
+
+scenario("posting scripts keep the nonce and document token from page-replaced globals", () => {
+  const passive = createEnvironment();
+  execute(passive, input.passiveScript);
+  execute(passive, pageInterceptionScript);
+  authorizePassive(passive);
+  passive.window.emit("pointerdown", pointerEvent(passive.document.media, passive.document.player));
+  passive.window.emit("pointermove",
+    pointerEvent(passive.document.media, passive.document.player, { clientX: 20 }));
+  equal(passive.messages.length, 1, "drag must still post through the captured host channel");
+  equal(JSON.parse(passive.messages[0]).nonce, input.nonce, "drag post must carry the nonce");
+  equal(passive.window.__leaked.length, 0, "page-replaced globals must not observe the drag post");
+
+  const focused = createEnvironment({ includeFocusedRoot: true });
+  execute(focused, input.focusedScript);
+  execute(focused, pageInterceptionScript);
+  authorizeFocused(focused);
+  const { controls, root } = focused.document.focused;
+  root.emit("click", actionEvent(controls.close, true));
+  equal(focused.messages.map(message => JSON.parse(message).type).join(","), "state,request",
+    "Focused must still post through the captured host channel");
+  equal(focused.window.__leaked.length, 0, "page-replaced globals must not observe Focused posts");
 });
 
 if (failures.length) {

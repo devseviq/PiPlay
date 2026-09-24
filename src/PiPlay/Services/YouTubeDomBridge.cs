@@ -38,17 +38,32 @@ public static class YouTubeDomBridge
         "||document.querySelector('video'))";
 
     // YouTube_Compliance.md: while the player element carries an ad class, PiPlay must not write
-    // currentTime, change playback rate, or invoke Next; a missing player is unknown and fails
-    // closed. Host writers embed this guard so the probe and the write are one atomic script.
-    // The Focused overlay's isAdActive uses the same selector and class names.
+    // currentTime, change playback rate, or invoke Next; a missing video or player is unknown and
+    // fails closed. Host writers embed this guard so the probe and the write are one atomic script.
+    // The guard declares the target video `v` (spec 26.3) and reads ad state from the player that
+    // contains it: a page-wide player query returns the first match in document order, which can
+    // be another, clear player while #movie_player shows an ad. The Focused overlay's isAdActive
+    // uses the same class names on its one bound player.
     private const string AdPlayerSelector = "#movie_player,.html5-video-player";
     private const string AdShowingClass = "ad-showing";
     private const string AdInterruptingClass = "ad-interrupting";
 
     private static readonly string AdStateGuardScript = $@"
-  const adPlayer = document.querySelector('{AdPlayerSelector}');
+  const v = {VideoSelector};
+  const adPlayer = v ? v.closest('{AdPlayerSelector}') : null;
   const adState = !adPlayer ? 'unknown'
     : (adPlayer.classList.contains('{AdShowingClass}') || adPlayer.classList.contains('{AdInterruptingClass}')) ? 'ad' : 'clear';";
+
+    // Document-created scripts that post capture the serializer and host channel before any page
+    // script runs, so a page that later wraps JSON.stringify or chrome.webview.postMessage never
+    // sees the nonce or document token. Payloads are null-prototype objects for the same reason:
+    // an inherited toJSON getter would otherwise observe them.
+    private const string HostChannelCaptureScript = """
+      const stringify = JSON.stringify;
+      const webview = window.chrome && window.chrome.webview;
+      const host = webview && typeof webview.postMessage === "function"
+        ? { postMessage: webview.postMessage.bind(webview) } : null;
+    """;
 
     private static readonly string ReadStateScript = $@"
 (() => {{
@@ -228,7 +243,6 @@ public static class YouTubeDomBridge
     internal static string BuildSeekScript(int seconds) => $@"
 (() => {{
   {AdStateGuardScript}
-  const v = {VideoSelector};
   if (v && adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
 }})()";
 
@@ -238,7 +252,6 @@ public static class YouTubeDomBridge
     internal static string BuildSeekAndPauseScript(int seconds) => $@"
 (() => {{
   {AdStateGuardScript}
-  const v = {VideoSelector};
   if (!v) return;
   if (adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
   v.pause();
@@ -250,7 +263,6 @@ public static class YouTubeDomBridge
     internal static string BuildSeekAndPlayScript(int seconds) => $@"
 (() => {{
   {AdStateGuardScript}
-  const v = {VideoSelector};
   if (!v) return;
   if (adState === 'clear') {{ try {{ v.currentTime = {seconds.ToString(CultureInfo.InvariantCulture)}; }} catch (e) {{}} }}
   const p = v.play(); if (p && p.catch) p.catch(() => {{}});
@@ -281,7 +293,6 @@ public static class YouTubeDomBridge
         return $@"
 (() => {{
   {AdStateGuardScript}
-  const v = {VideoSelector};
   if (!v) return;
   {volumeScript}
   {mutedScript}
@@ -335,6 +346,7 @@ public static class YouTubeDomBridge
   if (window.top !== window || window.__piplaySurfaceDragInstalled) return;
   window.__piplaySurfaceDragInstalled = true;
 
+{{HostChannelCaptureScript}}
   const nonce = {{nonceJson}};
   const thresholdX = {{horizontal}};
   const thresholdY = {{vertical}};
@@ -420,9 +432,8 @@ public static class YouTubeDomBridge
     event.preventDefault();
     event.stopImmediatePropagation();
     try {
-      const host = window.chrome && window.chrome.webview;
-      if (host) host.postMessage(JSON.stringify({
-        channel: "piplay.window", v: 1, type: "dragStart", nonce: nonce,
+      if (host) host.postMessage(stringify({
+        __proto__: null, channel: "piplay.window", v: 1, type: "dragStart", nonce: nonce,
         documentToken: documentToken
       }));
     } catch (_) { /* best-effort: native strip remains the recovery drag path */ }
@@ -430,7 +441,13 @@ public static class YouTubeDomBridge
 
   window.addEventListener("pointerup", clearGesture, true);
   window.addEventListener("pointercancel", clearGesture, true);
-  window.addEventListener("blur", () => { clearGesture(); clearSuppression(); }, true);
+  // Only the window losing focus ends a gesture. Capture also sees element blurs, and pressing the
+  // video blurs whatever control was clicked before it, which must not cancel the armed drag.
+  window.addEventListener("blur", event => {
+    if (event.target !== window) return;
+    clearGesture();
+    clearSuppression();
+  }, true);
   window.addEventListener("click", event => {
     if (!suppressClick) return;
     clearSuppression();
@@ -480,6 +497,7 @@ public static class YouTubeDomBridge
   "use strict";
   if (window.top !== window || window.__piplayFocusedSurface) return;
 
+{{HostChannelCaptureScript}}
   const nonce = {{nonceJson}};
   const STYLE_ID = "piplay-focused-surface-style";
   const ROOT_ID = "piplay-focused-overlay";
@@ -497,6 +515,8 @@ public static class YouTubeDomBridge
   let documentToken = null;
   let lastPaused = null;
   let lastPointerRevealAt = 0;
+  // Unmuting a video whose volume is 0 would stay silent, so Unmute also restores this volume.
+  const UNMUTE_VOLUME = 0.5;
 
   const icons = {
     volume: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm12.2-.8a5.4 5.4 0 0 1 0 7.6M18.8 5.6a9 9 0 0 1 0 12.8"/></svg>',
@@ -659,23 +679,40 @@ public static class YouTubeDomBridge
   }
 
   function isWatchPage() {
-    const host = location.hostname.toLowerCase();
-    return (host === "youtube.com" || host.endsWith(".youtube.com")) && location.pathname === "/watch";
+    const hostname = location.hostname.toLowerCase();
+    return (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) && location.pathname === "/watch";
   }
 
+  // One player drives Focused: #movie_player, else the first YouTube player. Its video, ad classes,
+  // and native Captions/Next are all read inside it, so another player earlier in the document can
+  // never make an ad look clear or receive a custom action (YouTube_Compliance.md).
   function playerElement() {
-    return document.querySelector("{{AdPlayerSelector}}");
+    return document.getElementById("movie_player") || document.querySelector(".html5-video-player");
+  }
+
+  function currentPlayer() {
+    return boundPlayer && boundPlayer.isConnected ? boundPlayer : playerElement();
   }
 
   function video() {
-    return document.querySelector("#movie_player video.html5-main-video,video.html5-main-video,video");
+    const player = currentPlayer();
+    return player ? player.querySelector("video.html5-main-video") || player.querySelector("video") : null;
+  }
+
+  function nativeControl(selector) {
+    const player = currentPlayer();
+    return player ? player.querySelector(selector) : null;
   }
 
   function isAdActive() {
-    const player = boundPlayer && boundPlayer.isConnected ? boundPlayer : playerElement();
+    const player = currentPlayer();
     // A missing player element is unknown ad state and fails closed (YouTube_Compliance.md).
     if (!player) return true;
     return player.classList.contains({{adShowingJson}}) || player.classList.contains({{adInterruptingJson}});
+  }
+
+  function isMuted(media) {
+    return media.muted || media.volume === 0;
   }
 
   function formatTime(value) {
@@ -691,9 +728,8 @@ public static class YouTubeDomBridge
     if (!documentToken) return;
     if (!trustedEvent || !["close", "pinToggle", "fullscreenToggle", "settings"].includes(action)) return;
     try {
-      const host = window.chrome && window.chrome.webview;
-      if (host) host.postMessage(JSON.stringify({
-        channel: "piplay.focused", v: 1, type: "request", nonce: nonce, documentToken: documentToken, action: action
+      if (host) host.postMessage(stringify({
+        __proto__: null, channel: "piplay.focused", v: 1, type: "request", nonce: nonce, documentToken: documentToken, action: action
       }));
     } catch (_) { /* native strip remains available */ }
   }
@@ -703,9 +739,8 @@ public static class YouTubeDomBridge
     if (surfaceActive === active) return;
     surfaceActive = active;
     try {
-      const host = window.chrome && window.chrome.webview;
-      if (host) host.postMessage(JSON.stringify({
-        channel: "piplay.focused", v: 1, type: "state", nonce: nonce, documentToken: documentToken, active: active
+      if (host) host.postMessage(stringify({
+        __proto__: null, channel: "piplay.focused", v: 1, type: "state", nonce: nonce, documentToken: documentToken, active: active
       }));
     } catch (_) { /* native strip remains visible until a positive state reaches the host */ }
   }
@@ -819,7 +854,10 @@ public static class YouTubeDomBridge
 
   function hasInteractiveAttention() {
     if (!root) return false;
-    const focused = document.activeElement && root.contains(document.activeElement);
+    // Only keyboard focus holds the controls: Chromium also focuses a button or rail on a mouse
+    // click, and that focus would otherwise reschedule the fade forever.
+    const focused = document.activeElement && root.contains(document.activeElement) &&
+      document.activeElement.matches(":focus-visible");
     const hovered = root.querySelector(".piplay-focused-button:hover,.piplay-focused-progress:hover");
     return !!focused || !!hovered;
   }
@@ -866,7 +904,7 @@ public static class YouTubeDomBridge
       if (controls.play.title !== label) controls.play.title = label;
     }
     if (controls.mute) {
-      const muted = media.muted || media.volume === 0;
+      const muted = isMuted(media);
       const label = muted ? "Unmute" : "Mute";
       setAttribute(controls.mute, "aria-pressed", muted);
       setAttribute(controls.mute, "aria-label", label);
@@ -878,13 +916,13 @@ public static class YouTubeDomBridge
       setAttribute(controls.pin, "aria-label", label);
       if (controls.pin.title !== label) controls.pin.title = label;
     }
-    const nativeCaptions = document.querySelector(".ytp-subtitles-button");
+    const nativeCaptions = nativeControl(".ytp-subtitles-button");
     if (controls.captions) {
       setDisabled(controls.captions, !nativeCaptions);
       setAttribute(controls.captions, "aria-pressed",
         !!nativeCaptions && nativeCaptions.getAttribute("aria-pressed") === "true");
     }
-    const nativeNext = document.querySelector(".ytp-next-button");
+    const nativeNext = nativeControl(".ytp-next-button");
     if (controls.next)
       setDisabled(controls.next, adActive || !nativeNext || nativeNext.getAttribute("aria-disabled") === "true");
 
@@ -907,13 +945,18 @@ public static class YouTubeDomBridge
       if (media.paused) { const play = media.play(); if (play && play.catch) play.catch(() => {}); }
       else media.pause();
     } else if (action === "mute" && media) {
-      media.muted = !media.muted;
+      // Act on what the label says (volume 0 reads as muted).
+      if (!isMuted(media)) media.muted = true;
+      else {
+        media.muted = false;
+        if (media.volume === 0) media.volume = UNMUTE_VOLUME;
+      }
     } else if (action === "captions") {
-      const native = document.querySelector(".ytp-subtitles-button");
+      const native = nativeControl(".ytp-subtitles-button");
       if (native) native.click();
     } else if (action === "next") {
       if (isAdActive()) return;
-      const native = document.querySelector(".ytp-next-button:not([aria-disabled='true'])");
+      const native = nativeControl(".ytp-next-button:not([aria-disabled='true'])");
       if (native) native.click();
     } else if (action === "pinToggle") {
       postWindowAction(action, event.isTrusted);
