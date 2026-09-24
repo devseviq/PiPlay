@@ -20,6 +20,8 @@ public static class BorderlessWindowHelper
     private const int SC_MOVE = 0xF010;
     private const int HTCAPTION = 2;
     private const int VK_LBUTTON = 0x01;
+    private const int VK_RBUTTON = 0x02;
+    private const int SM_SWAPBUTTON = 23;
     private const uint DefaultDpi = 96;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private static readonly UIntPtr ResizeSubclassId = new(0x5049504C); // "PIPL"
@@ -68,14 +70,21 @@ public static class BorderlessWindowHelper
     /// </summary>
     internal static bool TryBeginWindowMove(Window window)
     {
-        if (window.WindowState != WindowState.Normal || !IsLeftButtonDown()) return false;
+        if (window.WindowState != WindowState.Normal || !IsPrimaryButtonDown()) return false;
         var hwnd = new WindowInteropHelper(window).Handle;
         if (hwnd == IntPtr.Zero || !GetCursorPos(out var point)) return false;
 
         return QueueWindowMove(hwnd, point.X, point.Y, PostMessage);
     }
 
-    internal static bool IsLeftButtonDown() => (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    /// <summary>
+    /// The page script arms a drag on the LOGICAL primary button (<c>event.button === 0</c>), but
+    /// GetAsyncKeyState reads PHYSICAL buttons; with swapped buttons the primary is the right one.
+    /// </summary>
+    internal static bool IsPrimaryButtonDown() =>
+        (GetAsyncKeyState(PrimaryButtonVirtualKey(GetSystemMetrics(SM_SWAPBUTTON) != 0)) & 0x8000) != 0;
+
+    internal static int PrimaryButtonVirtualKey(bool buttonsSwapped) => buttonsSwapped ? VK_RBUTTON : VK_LBUTTON;
 
     internal static IntPtr PackScreenPointForTests(int x, int y) => PackScreenPoint(x, y);
 
@@ -373,6 +382,9 @@ public static class BorderlessWindowHelper
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int virtualKey);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT point);

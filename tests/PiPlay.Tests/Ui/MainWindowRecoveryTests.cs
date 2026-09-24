@@ -82,6 +82,36 @@ public class MainWindowRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void The_failure_panel_hides_the_browser_surface_it_would_otherwise_sit_under()
+    {
+        // Airspace: WPF cannot draw over the WebView2 child HWND, so a visible panel over a visible
+        // browser shows neither its heading nor Retry.
+        StaTestThread.Invoke(() =>
+        {
+            var window = new MainWindow();
+            window.SetBrowserReadyForTests(true);
+            Assert.Equal(Visibility.Visible, window.BrowserForTests.Visibility);
+
+            window.HandleSourceProcessFailure(WebViewFailureKind.RendererExited);
+            Assert.True(window.IsRuntimeErrorPanelVisibleForTests);
+            Assert.Equal(Visibility.Hidden, window.BrowserForTests.Visibility);
+
+            window.ReleaseBrowserStateAfterNavigationForTests();
+            Assert.False(window.IsRuntimeErrorPanelVisibleForTests);
+            Assert.Equal(Visibility.Visible, window.BrowserForTests.Visibility);
+
+            // Popped out: the placeholder keeps the browser hidden after the panel leaves.
+            window.ShowSourcePlaceholder(true);
+            window.ShowBrowserStateForTests("The browser keeps failing", "Retry", retryEnabled: true);
+            Assert.Equal(Visibility.Hidden, window.BrowserForTests.Visibility);
+            window.ReleaseBrowserStateAfterNavigationForTests();
+            Assert.Equal(Visibility.Hidden, window.BrowserForTests.Visibility);
+            window.ShowSourcePlaceholder(false);
+            Assert.Equal(Visibility.Visible, window.BrowserForTests.Visibility);
+        });
+    }
+
+    [Fact]
     public void Helper_process_exits_and_an_unresponsive_renderer_are_logged_only()
     {
         StaTestThread.Invoke(() =>
@@ -370,6 +400,13 @@ public class MainWindowRecoveryTests : IDisposable
             Assert.False(window.PendingReturnReplayForTests.Paused);
             Assert.Equal(0.5, window.PendingReturnReplayForTests.Volume);
             Assert.Equal("AAAAAAAAAAA", window.AutoLastHandledVideoIdForTests);
+
+            // The replacement browser comes up and restarts the Auto detector: the returned video
+            // must stay handled, or Auto pops it straight back out once it plays (spec 6.1).
+            window.SetBrowserReadyForTests(true);
+            window.RestartAutoDetectorForTests(autoPopout: true);
+            Assert.Equal("AAAAAAAAAAA", window.AutoLastHandledVideoIdForTests);
+            window.RestartAutoDetectorForTests(autoPopout: false);   // stop the detector timer
         });
     }
 
@@ -613,6 +650,29 @@ public class MainWindowRecoveryTests : IDisposable
 
             Assert.True(player.IsClosingForTests);
             Assert.True(player.ReturnBrowserProcessFailedForTests);
+        });
+    }
+
+    [Fact]
+    public void A_popout_renderer_crash_loop_closes_without_blaming_the_shared_browser()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            var player = NewHeadlessPlayer();
+            var t0 = DateTimeOffset.UtcNow;
+            for (var i = 0; i < WebViewProcessFailurePolicy.MaxConsecutiveRecoveries; i++)
+            {
+                Assert.Equal(WebViewRecoveryAction.Reload,
+                    player.HandleProcessFailure(WebViewFailureKind.RendererExited, t0.AddSeconds(i)));
+                player.SettleNavigationForTests(succeeded: true);
+            }
+
+            Assert.Equal(WebViewRecoveryAction.GiveUp,
+                player.HandleProcessFailure(WebViewFailureKind.RendererExited, t0.AddSeconds(10)));
+
+            Assert.True(player.IsClosingForTests);
+            // The browser process is alive: the Source must not recreate its own healthy core.
+            Assert.False(player.ReturnBrowserProcessFailedForTests);
         });
     }
 

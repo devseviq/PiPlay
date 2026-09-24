@@ -64,9 +64,13 @@ public static class NavigationPolicy
         || host == "youtube-nocookie.com" || host.EndsWith(".youtube-nocookie.com", StringComparison.Ordinal);
 
     /// <summary>
-    /// True for Google sign-in/account hosts on any TLD:
-    /// <c>&lt;accounts|signin|myaccount|consent&gt;.google.&lt;tld&gt;</c>, including two-label
-    /// suffixes such as <c>co.uk</c>. Rejects look-alikes like <c>accounts.google.com.evil.test</c>.
+    /// True for Google sign-in/account hosts on Google's own domains:
+    /// <c>&lt;accounts|signin|myaccount|consent&gt;.google.&lt;suffix&gt;</c>, where the suffix is
+    /// <c>com</c>, a two-letter country code, or one of Google's <c>com.xx</c> / <c>co.xx</c>
+    /// country domains (sign-in propagates its session through the regional domain, e.g.
+    /// <c>accounts.google.no/accounts/SetSID</c>). Rejects look-alikes such as
+    /// <c>accounts.google.com.evil.test</c> and hosts under a registrable domain someone else can
+    /// own, such as <c>accounts.google.abc.io</c>.
     /// </summary>
     public static bool IsGoogleAuthHost(string host)
     {
@@ -74,27 +78,40 @@ public static class NavigationPolicy
         if (labels.Length < 3) return false;
         if (labels[1] != "google") return false;
         if (Array.IndexOf(GoogleAuthSubdomains, labels[0]) < 0) return false;
-        return IsPlausibleTldSuffix(labels, 2);
+        return IsGoogleDomainSuffix(labels, 2);
     }
 
-    // Labels from startIndex to the end must look like a public suffix: one or two purely
-    // alphabetic labels of 2-3 chars (com, no, co, uk, de, ...). This is what keeps a
-    // look-alike host (extra registrable labels after the suffix) from matching.
-    private static bool IsPlausibleTldSuffix(string[] labels, int startIndex)
-    {
-        var count = labels.Length - startIndex;
-        if (count is < 1 or > 2) return false;
-
-        for (var i = startIndex; i < labels.Length; i++)
+    private static bool IsGoogleDomainSuffix(string[] labels, int startIndex) =>
+        (labels.Length - startIndex) switch
         {
-            var label = labels[i];
-            if (label.Length is < 2 or > 3) return false;
-            foreach (var c in label)
-                if (c is < 'a' or > 'z') return false;
-        }
+            1 => labels[startIndex] == "com" || IsCountryCode(labels[startIndex]),
+            2 => labels[startIndex] switch
+            {
+                "com" => GoogleComCountryDomains.Contains(labels[startIndex + 1]),
+                "co" => GoogleCoCountryDomains.Contains(labels[startIndex + 1]),
+                _ => false,
+            },
+            _ => false,
+        };
 
-        return true;
-    }
+    private static bool IsCountryCode(string label) =>
+        label.Length == 2 && label[0] is >= 'a' and <= 'z' && label[1] is >= 'a' and <= 'z';
+
+    // Google's country domains that use a second-level label (google.com.au, google.co.uk, ...).
+    // A missing entry only sends that region's sign-in step to the default browser.
+    private static readonly HashSet<string> GoogleComCountryDomains = new(StringComparer.Ordinal)
+    {
+        "af", "ag", "ai", "ar", "au", "bd", "bh", "bn", "bo", "br", "bz", "co", "cu", "cy", "do",
+        "ec", "eg", "et", "fj", "gh", "gi", "gt", "hk", "jm", "kh", "kw", "lb", "ly", "mm", "mt",
+        "mx", "my", "na", "ng", "ni", "np", "om", "pa", "pe", "pg", "ph", "pk", "pr", "py", "qa",
+        "sa", "sb", "sg", "sl", "sv", "tj", "tr", "tw", "ua", "uy", "vc", "vn",
+    };
+
+    private static readonly HashSet<string> GoogleCoCountryDomains = new(StringComparer.Ordinal)
+    {
+        "ao", "bw", "ck", "cr", "id", "il", "in", "jp", "ke", "kr", "ls", "ma", "mz", "nz", "th",
+        "tz", "ug", "uk", "uz", "ve", "vi", "za", "zm", "zw",
+    };
 
     /// <summary>
     /// A failed completion for a navigation that is provably not the latest one started on the core

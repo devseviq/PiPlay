@@ -33,6 +33,7 @@ public partial class PlayerWindow : Window
     // YouTube fullscreen button) caused the expansion, so exiting element fullscreen restores the
     // window without un-expanding one the user expanded deliberately.
     private bool _maximizedForFullScreenElement;
+    private readonly ShortcutRepeatGate<PopoutShortcut> _shortcutGate = new();
 
     // Mutable: the compact fallback (spec 10.3 / Q-6) flips the window to normal-mode behavior in
     // place, so the mode-dependent seams (timestamp source, minimum size) follow the live surface.
@@ -82,7 +83,7 @@ public partial class PlayerWindow : Window
     private bool _syncTickInProgress;
     private bool _closing;
     private bool _capturedReturn;
-    private bool _nudgedPlay;
+    private bool _playNudgeDecided;
     private bool _nudgePlayOnInitialPause;
     private bool _finalReturnPlaybackCaptured;
 
@@ -200,6 +201,7 @@ public partial class PlayerWindow : Window
         ApplyAppearance(accentColor, fadeIdleDelayMs, stripAutoHide);
         MouseMove += (_, _) => OnUserActivity();
         MouseEnter += (_, _) => OnUserActivity();
+        ChromeStrip.IsKeyboardFocusWithinChanged += (_, _) => OnUserActivity();
 
         Loaded += (_, _) => ApplyFadeState();
         Loaded += async (_, _) => await InitializePlayerAsync();
@@ -232,6 +234,12 @@ public partial class PlayerWindow : Window
             ApplyCornerModeToHwnd();
             ApplyWindowOpacityToHwnd(animate: false);   // appear at the configured level, no flash
         };
+        // A key-up can be lost while another window has focus; never keep a shortcut latched.
+        Deactivated += (_, _) => _shortcutGate.Release();
+        // Ctrl+Shift+P that popped the video out is usually still held when the Popout activates:
+        // its auto-repeat must not bring the video straight back.
+        Activated += (_, _) => LatchHeldShortcut(KeyboardShortcutPolicy.HeldToggleForPopout(
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
         Closing += PlayerWindow_Closing;
         Closed += PlayerWindow_Closed;
     }
@@ -258,6 +266,7 @@ public partial class PlayerWindow : Window
             core.NewWindowRequested += Core_NewWindowRequested;
             core.NavigationCompleted += Core_NavigationCompleted;
             core.SourceChanged += Core_SourceChanged;
+            core.DocumentTitleChanged += Core_DocumentTitleChanged;
             core.ProcessFailed += Core_ProcessFailed;
             // Secondary expand route (overhaul Task 4): the compact shell's YouTube fullscreen
             // button raises a fullscreen ELEMENT that today fills only the WebView bounds the
@@ -387,10 +396,14 @@ public partial class PlayerWindow : Window
             case WebViewRecoveryAction.GiveUp:
                 // Playback goes back to the Source with the last polled sample (the final capture
                 // cannot run against a dead core; the PP-04 gate keeps the last poll intact). The
-                // stamp tells the Source its own core is dead before it acts on the return.
+                // stamp tells the Source its own core is dead before it acts on the return — only
+                // when the browser process actually exited. A renderer crash loop that spent the
+                // budget left the shared browser alive, and the Source's own core with it.
                 _processRecoveryInProgress = false;
-                _returnState.BrowserProcessFailed = true;
-                Log.Info("Popout Player closing after a browser-process failure; playback returns to the Source Window.");
+                _returnState.BrowserProcessFailed = kind == WebViewFailureKind.BrowserProcessExited;
+                Log.Info(_returnState.BrowserProcessFailed
+                    ? "Popout Player closing after a browser-process failure; playback returns to the Source Window."
+                    : "Popout Player closing after repeated page failures; playback returns to the Source Window.");
                 Close();
                 break;
         }
@@ -463,7 +476,7 @@ public partial class PlayerWindow : Window
         _returnState.PlaylistId = target.PlaylistId;
         _returnIdentityGeneration++;
         ResetReturnMediaStateForNewTarget();
-        _nudgedPlay = false;
+        _playNudgeDecided = false;
         _finalReturnPlaybackCaptured = false;
         _navCompleted = false;
         _syncTimer.Stop();
@@ -495,7 +508,24 @@ public partial class PlayerWindow : Window
     /// normal-page-only — compact tracking comes from shell state messages instead.
     /// </summary>
     private void Core_SourceChanged(object? sender, CoreWebView2SourceChangedEventArgs e)
-        => TrackReturnIdentity(Player.CoreWebView2?.Source);
+    {
+        var core = Player.CoreWebView2;
+        TrackReturnIdentity(core?.Source);
+        ApplyDocumentTitle(core?.DocumentTitle, core?.Source);
+    }
+
+    private void Core_DocumentTitleChanged(object? sender, object e)
+    {
+        var core = Player.CoreWebView2;
+        ApplyDocumentTitle(core?.DocumentTitle, core?.Source);
+    }
+
+    /// <summary>
+    /// Name the window after the video so the taskbar, Alt+Tab, and screen readers can tell the
+    /// Popout from the Source Window. Display only: the title is never logged (spec 18).
+    /// </summary>
+    internal void ApplyDocumentTitle(string? documentTitle, string? documentSource) =>
+        Title = PopoutTitlePolicy.Format(documentTitle, documentSource);
 
     /// <summary>Internal for the WPF test lane (CoreWebView2 event args cannot be constructed).</summary>
     internal void TrackReturnIdentity(string? source)
@@ -852,9 +882,10 @@ public partial class PlayerWindow : Window
             // The popout is the active surface now: if it came up paused, nudge play once
             // (play() is an allowed control per spec 19). Best-effort; never forced again.
             // REQ-RETURN-07: a popout launched from a paused source is never auto-nudged.
-            if (_nudgePlayOnInitialPause && !_nudgedPlay && state.Paused)
+            // The first sample settles the decision either way: a video that is already playing
+            // is never nudged, so a later pause (the user's, or the video ending) stays paused.
+            if (ShouldNudgePlay(state.Paused))
             {
-                _nudgedPlay = true;
                 await YouTubeDomBridge.PlayAsync(core);
                 if (!IsSyncPollCurrent(generation) || _finalReturnPlaybackCaptured) return;
             }
@@ -865,6 +896,14 @@ public partial class PlayerWindow : Window
         {
             EndSyncPoll();
         }
+    }
+
+    /// <summary>One decision per target, made on its first playback sample.</summary>
+    internal bool ShouldNudgePlay(bool firstSamplePaused)
+    {
+        if (!_nudgePlayOnInitialPause || _playNudgeDecided) return false;
+        _playNudgeDecided = true;
+        return firstSamplePaused;
     }
 
     internal async Task<PlayerReturnState> CaptureReturnStateNowAsync()
@@ -934,7 +973,11 @@ public partial class PlayerWindow : Window
 
     // --- Chrome ---
 
-    private void PinToggle_Click(object sender, RoutedEventArgs e) => ApplyTopmostFromToggle();
+    private void PinToggle_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyTopmostFromToggle();
+        ReturnFocusToVideoAfterMouseClick();
+    }
 
     private void ApplyTopmostFromToggle()
     {
@@ -947,15 +990,43 @@ public partial class PlayerWindow : Window
     private void UpdatePinAffordance(bool pinned)
     {
         var action = pinned ? "Unpin popout from top" : "Pin popout on top";
-        PinToggle.ToolTip = action;
+        PinToggle.ToolTip = KeyboardShortcutPolicy.WithGesture(action, KeyboardShortcutPolicy.TogglePinGesture);
         System.Windows.Automation.AutomationProperties.SetName(PinToggle, action);
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
+    /// <summary>
+    /// A mouse click leaves keyboard focus on the chrome button, so the next Space would press
+    /// Pin or Fade again instead of reaching YouTube's play/pause. Hand focus back to the page
+    /// after a mouse click; a keyboard press keeps focus where the user put it (spec 20).
+    /// </summary>
+    private void ReturnFocusToVideoAfterMouseClick()
+    {
+        if (InputManager.Current.MostRecentInputDevice is MouseDevice) ReturnFocusToVideo();
+    }
+
+    private void ReturnFocusToVideo()
+    {
+        if (_closing || Player.CoreWebView2 is null) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (!_closing) Player.Focus();
+        });
+    }
+
     private void ChromeStrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState != MouseButtonState.Pressed) return;
+        // Double-clicking the top bar expands or restores, as on any Windows title bar. This is a
+        // deliberate gesture on PiPlay's own handle; CaptionHeight=0 still keeps the OS caption
+        // from maximizing on its own.
+        if (e.ClickCount == 2)
+        {
+            ToggleExpandedState();
+            e.Handled = true;
+            return;
+        }
         // Expanded covers the monitor: there is nowhere to drag to, and DragMove on a maximized
         // borderless window misbehaves (the frame moves without un-maximizing). Restore is a
         // deliberate act (expand button / Esc), never a drag side effect.
@@ -965,9 +1036,75 @@ public partial class PlayerWindow : Window
         finally { OnUserActivity(); } // keep controls up briefly after a drag, then resume idle countdown
     }
 
+    // --- Arrange menu (spec 16.4): corners, 16:9 sizes, and the window shortcuts ---
+
+    /// <summary>Gap between a parked Popout and the work-area edges, in DIPs.</summary>
+    internal const int CornerMarginDip = 16;
+
+    private void PopoutArrangeMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        ExpandMenuItem.Header = maximized ? "R_estore popout" : "_Expand popout";
+        PinMenuItem.Header = PinToggle.IsChecked == true ? "Un_pin popout from top" : "_Pin popout on top";
+        // Corners and sizes move a floating window; an expanded one restores first (Esc/F11).
+        foreach (var item in PopoutArrangeMenu.Items.OfType<System.Windows.Controls.MenuItem>())
+        {
+            if (item.Tag is not null) item.IsEnabled = !maximized;
+        }
+    }
+
+    private void MoveToCornerMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string tag } || !Enum.TryParse<ScreenCorner>(tag, out var corner))
+            return;
+        WindowPlacementService.TryArrangeFloating(this, (window, work, scale) =>
+            PlacementMath.AlignToCorner(window, work, corner, (int)Math.Round(CornerMarginDip * scale)));
+        OnUserActivity();
+    }
+
+    private void VideoSizeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out var videoWidthDip))
+            return;
+        var (chromeWidthDip, chromeHeightDip) = SteadyStateChromeDip();
+        WindowPlacementService.TryArrangeFloating(this, (window, work, scale) =>
+            PlacementMath.ResizeToVideoWidth(
+                window,
+                work,
+                videoWidthPx: (int)Math.Round(videoWidthDip * scale),
+                chromeWidthPx: (int)Math.Round(chromeWidthDip * scale),
+                chromeHeightPx: (int)Math.Round(chromeHeightDip * scale)));
+        OnUserActivity();
+    }
+
+    /// <summary>
+    /// Window space the page does not get, measured from the live layout: the accent edge, the
+    /// resize band, and the top bar unless strip auto-hide will collapse it once idle.
+    /// </summary>
+    private (double Width, double Height) SteadyStateChromeDip()
+    {
+        var width = Math.Max(0, ActualWidth - Player.ActualWidth);
+        var height = Math.Max(0, ActualHeight - Player.ActualHeight);
+        if (_fadeEnabled && _stripAutoHide && ChromeStrip.Visibility == Visibility.Visible)
+            height = Math.Max(0, height - ChromeStrip.ActualHeight);
+        return (width, height);
+    }
+
+    private void ExpandMenuItem_Click(object sender, RoutedEventArgs e) => ToggleExpandedState();
+
+    private void PinMenuItem_Click(object sender, RoutedEventArgs e) =>
+        ExecuteShortcut(PopoutShortcut.TogglePin);
+
+    private void BringBackMenuItem_Click(object sender, RoutedEventArgs e) =>
+        ExecuteShortcut(PopoutShortcut.BringVideoBack);
+
     // --- Expand / restore (overhaul Task 4) ---
 
-    private void ExpandButton_Click(object sender, RoutedEventArgs e) => ToggleExpandedState();
+    private void ExpandButton_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleExpandedState();
+        ReturnFocusToVideoAfterMouseClick();
+    }
 
     /// <summary>
     /// The ONE expand path (Q-2): the native strip button and the shell's fullscreenToggle request
@@ -1004,7 +1141,8 @@ public partial class PlayerWindow : Window
     {
         var maximized = WindowState == WindowState.Maximized;
         ExpandButton.Content = maximized ? GlyphRestore : GlyphMaximize;
-        ExpandButton.ToolTip = maximized ? "Restore popout" : "Expand popout";
+        ExpandButton.ToolTip = KeyboardShortcutPolicy.WithGesture(
+            maximized ? "Restore popout" : "Expand popout", KeyboardShortcutPolicy.ToggleExpandGesture);
     }
 
     /// <summary>
@@ -1035,12 +1173,72 @@ public partial class PlayerWindow : Window
         }
     }
 
-    /// <summary>Esc restores an expanded popout (Task 4 reversibility). Only reachable while WPF
-    /// owns focus — keys pressed inside the WebView2 child stay in the browser.</summary>
+    /// <summary>
+    /// Window shortcuts (spec 20): Esc restores an expanded popout, F11 expands or restores,
+    /// Ctrl+T pins, and Ctrl+W or Ctrl+Shift+P brings the video back. They also work while the
+    /// video has focus: the WPF WebView2 control re-raises accelerator keys (Esc, function keys,
+    /// Ctrl chords) as routed key events and lets the page have any key left unhandled. Plain
+    /// keys never arrive here from the page, so YouTube keeps Space, K, J, L, M, F, and arrows.
+    /// </summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        if (!e.Handled && e.Key == Key.Escape && TryRestoreFromEscape()) e.Handled = true;
+        if (!e.Handled)
+        {
+            var shortcut = KeyboardShortcutPolicy.ForPopout(
+                KeyboardShortcutInput.Translate(e), KeyboardShortcutInput.Translate(Keyboard.Modifiers));
+            if (shortcut != PopoutShortcut.None && HandleShortcut(shortcut, e.IsRepeat)) e.Handled = true;
+        }
         base.OnPreviewKeyDown(e);
+    }
+
+    protected override void OnPreviewKeyUp(KeyEventArgs e)
+    {
+        _shortcutGate.Release();
+        base.OnPreviewKeyUp(e);
+    }
+
+    /// <summary>Returns true when the key was consumed.</summary>
+    internal bool HandleShortcut(PopoutShortcut shortcut, bool isRepeat)
+    {
+        if (_closing) return false;
+        // Escape is consumed only when it restores, so an unexpanded page still receives it.
+        if (shortcut == PopoutShortcut.RestoreFromExpand) return TryRestoreFromEscape();
+        // A held chord is swallowed without acting again, so the page never sees it either.
+        if (!_shortcutGate.TryBegin(shortcut, isRepeat)) return true;
+        return ExecuteShortcut(shortcut);
+    }
+
+    internal void LatchHeldShortcut(PopoutShortcut held)
+    {
+        if (held != PopoutShortcut.None) _shortcutGate.TryBegin(held, isRepeat: false);
+    }
+
+    /// <summary>The shared action path for a shortcut and its arrange-menu item.</summary>
+    private bool ExecuteShortcut(PopoutShortcut shortcut)
+    {
+        if (_closing) return false;
+        switch (shortcut)
+        {
+            case PopoutShortcut.ToggleExpand:
+                ToggleExpandedState();
+                return true;
+            case PopoutShortcut.TogglePin:
+                PinToggle.IsChecked = PinToggle.IsChecked != true;
+                ApplyTopmostFromToggle();
+                OnUserActivity();
+                return true;
+            case PopoutShortcut.BringVideoBack:
+                // Deferred like the Focused close action: a key forwarded from the page runs
+                // inside the controller's AcceleratorKeyPressed callback, and Close() disposes
+                // the WebView2 (a documented reentrancy hazard).
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, () =>
+                {
+                    if (!_closing) Close();
+                });
+                return true;
+            default:
+                return false;
+        }
     }
 
     private bool TryRestoreFromEscape()
@@ -1057,6 +1255,7 @@ public partial class PlayerWindow : Window
     // element events need a live CoreWebView2, neither of which exists for an unshown window —
     // and unshown windows receive no StateChanged, so the OS path is driven directly.
     internal void ApplyFullScreenElementStateForTests(bool contains) => ApplyFullScreenElementState(contains);
+    internal void ReleaseShortcutForTests() => _shortcutGate.Release();
     internal bool HandleEscapeForTests() => TryRestoreFromEscape();
     internal void HandleWindowStateChangedForTests() => HandleWindowStateChanged();
     internal bool IsMaximizedForFullScreenElementForTests => _maximizedForFullScreenElement;
@@ -1065,8 +1264,14 @@ public partial class PlayerWindow : Window
 
     // --- Controls fade (spec 7.1) ---
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e) =>
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read the device before the modal Settings opens: afterwards it reflects how the dialog
+        // was dismissed, and WPF has already restored focus to this button.
+        var byMouse = InputManager.Current.MostRecentInputDevice is MouseDevice;
         SettingsRequested?.Invoke(this, EventArgs.Empty);
+        if (byMouse) ReturnFocusToVideo();
+    }
 
     private void FadeToggle_Click(object sender, RoutedEventArgs e)
     {
@@ -1074,6 +1279,7 @@ public partial class PlayerWindow : Window
         _returnState.FadeEnabled = _fadeEnabled;
         ApplyFadeState();
         RefreshFocusedSurfaceAppearance();
+        ReturnFocusToVideoAfterMouseClick();
     }
 
     /// <summary>
@@ -1182,8 +1388,17 @@ public partial class PlayerWindow : Window
             RestartIdleTimer();
             return;
         }
-        if (FadePolicy.ShouldHide(_fadeEnabled, ChromeStrip.IsMouseOver, _isDragging, idleElapsed: true))
+        // Keyboard focus on a strip control holds the strip up like the pointer does (spec 7.1):
+        // fading a focused Pin or Close would leave Space pressing an invisible button. Only a
+        // keyboard user's focus counts; focus a mouse click left behind never holds the strip.
+        var focusInStrip = ChromeStrip.IsKeyboardFocusWithin;
+        var stripHasAttention = ChromeStrip.IsMouseOver ||
+            (focusInStrip && InputManager.Current.MostRecentInputDevice is KeyboardDevice);
+        if (FadePolicy.ShouldHide(_fadeEnabled, stripHasAttention, _isDragging, idleElapsed: true))
         {
+            // The device check is thread-wide and can be stale (Alt+Tab back, a click in the
+            // Source): whatever placed it, a faded strip never keeps focus. Space goes to YouTube.
+            if (focusInStrip) ReturnFocusToVideo();
             HideControls();
             // Window opacity idles on the SAME tick with the SAME inputs (one idleness definition,
             // spec 7.1–7.3).
@@ -1242,7 +1457,7 @@ public partial class PlayerWindow : Window
         // The final native handoff is PostMessage, so this stays non-blocking while avoiding a
         // second dispatcher hop that could miss a short drag after the physical button is released.
         ExecuteSurfaceDragRequest(
-            BorderlessWindowHelper.IsLeftButtonDown,
+            BorderlessWindowHelper.IsPrimaryButtonDown,
             () => BorderlessWindowHelper.TryBeginWindowMove(this));
     }
 

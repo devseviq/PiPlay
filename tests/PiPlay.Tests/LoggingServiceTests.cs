@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using PiPlay.Services;
 
 namespace PiPlay.Tests;
@@ -154,6 +156,58 @@ public class LoggingServiceDeliveryTests : IDisposable
 
         Assert.True(File.Exists(LogFile + ".1"), "1.2 MB of entries did not trigger a rotation");
         Assert.True(new FileInfo(LogFile).Length < 1_000_000, "the live log kept growing past the cap");
+    }
+
+    [Fact]
+    public void Rotation_rereads_the_file_after_another_process_already_rolled_it()
+    {
+        // A second launch logs to the same file before it hands off, and may roll it. The primary's
+        // count is then stale; rotating on it again would replace the fresh .1 (the primary's own
+        // history) with the second launch's few lines.
+        Directory.CreateDirectory(Path.Combine(_root, "logs"));
+        File.WriteAllText(LogFile, new string('x', 999_000), Encoding.UTF8);
+        var history = new FileInfo(LogFile).Length;
+        InitInTempRoot();   // seeds the count just under the cap
+
+        File.Move(LogFile, LogFile + ".1");                                        // the other process rolls
+        File.WriteAllText(LogFile, "second launch handing off" + Environment.NewLine, Encoding.UTF8);
+
+        Log.Info(new string('y', 2_000));   // pushes this process's count past the cap
+        Assert.True(Log.FlushForTests(TimeSpan.FromSeconds(10)));
+        Log.Info("next entry");             // the rotation check runs before this append
+        Assert.True(Log.FlushForTests(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(history, new FileInfo(LogFile + ".1").Length);                // the history survived
+        var text = File.ReadAllText(LogFile);
+        Assert.Contains("second launch handing off", text);
+        Assert.Contains(new string('y', 2_000), text);
+        Assert.Contains("[INFO] next entry", text);
+    }
+
+    [Fact]
+    public void Timestamps_use_the_gregorian_invariant_shape_under_any_culture()
+    {
+        // th-TH formats yyyy in the Buddhist calendar (Gregorian + 543), and a culture's own time
+        // separator replaces ':' in a custom format; neither may reach the log line.
+        var culture = new CultureInfo("th-TH");
+        culture.DateTimeFormat.TimeSeparator = ".";
+        var previous = CultureInfo.CurrentCulture;
+        InitInTempRoot();
+        try
+        {
+            CultureInfo.CurrentCulture = culture;
+            Log.Info("culture probe");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+        Assert.True(Log.FlushForTests(TimeSpan.FromSeconds(10)));
+
+        var line = Assert.Single(File.ReadAllLines(LogFile), l => l.EndsWith("[INFO] culture probe", StringComparison.Ordinal));
+        var match = Regex.Match(line, @"^(\d{4})-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[INFO\] culture probe$");
+        Assert.True(match.Success, line);
+        Assert.InRange(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), DateTime.Now.Year - 1, DateTime.Now.Year);
     }
 
     [Fact]

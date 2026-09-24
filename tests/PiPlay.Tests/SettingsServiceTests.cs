@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using PiPlay.Models;
 using PiPlay.Services;
 using PiPlay.Theme;
@@ -274,6 +276,102 @@ public class SettingsServiceTests : IDisposable
         // The bad file was renamed aside, not left in place to break the next load.
         var quarantined = Directory.GetFiles(_dir, "*.corrupt.*.json");
         Assert.Single(quarantined);
+    }
+
+    [Fact]
+    public void Quarantine_names_use_the_gregorian_invariant_timestamp_under_any_culture()
+    {
+        File.WriteAllText(_path, "{ this is not valid json ]]]");
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("th-TH");   // Buddhist calendar: Gregorian + 543
+            new SettingsService(_path).Load();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+
+        var name = Path.GetFileName(Assert.Single(Directory.GetFiles(_dir, "*.corrupt.*.json")));
+        var match = Regex.Match(name, @"^settings\.json\.corrupt\.(\d{4})\d{4}-\d{6}\.json$");
+        Assert.True(match.Success, name);
+        Assert.InRange(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), DateTime.Now.Year - 1, DateTime.Now.Year);
+    }
+
+    [Fact]
+    public void A_fresh_quarantine_of_a_long_untouched_file_survives_the_next_launch()
+    {
+        // Moving keeps the corrupt file's own write time, and cleanup judges age by it: a file last
+        // written 45 days ago used to be quarantined and then deleted at the very next launch.
+        File.WriteAllText(_path, "{ this is not valid json ]]]");
+        File.SetLastWriteTimeUtc(_path, DateTime.UtcNow.AddDays(-45));
+        var stale = Path.Combine(_dir, "settings.json.corrupt.20200101-000000.json");
+        File.WriteAllText(stale, "{}");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-45));
+
+        new SettingsService(_path).Load();   // quarantines the corrupt file
+        new SettingsService(_path).Load();   // next launch: the 30-day cleanup runs
+
+        Assert.False(File.Exists(stale), "a quarantine older than 30 days is still cleaned up");
+        var fresh = Assert.Single(Directory.GetFiles(_dir, "*.corrupt.*.json"));
+        Assert.Equal("{ this is not valid json ]]]", File.ReadAllText(fresh));
+    }
+
+    [Fact]
+    public void A_corrupt_file_that_cannot_be_moved_aside_is_copied_before_a_save_replaces_it()
+    {
+        const string corrupt = "{ this is not valid json ]]]";
+        File.WriteAllText(_path, corrupt);
+        var svc = new SettingsService(_path, moveFile: (_, _) => throw new IOException("sharing violation"));
+
+        svc.Load();
+        Assert.Equal(SettingsSaveResult.Saved, svc.Save(new AppSettings()));   // bytes were observed: not blocked
+
+        var quarantine = Assert.Single(Directory.GetFiles(_dir, "*.corrupt.*.json"));
+        Assert.Equal(corrupt, File.ReadAllText(quarantine));
+        Assert.Equal("https://www.youtube.com/", new SettingsService(_path).Load().LastUrl);
+    }
+
+    [Fact]
+    public void A_theme_block_is_recognized_in_any_property_case()
+    {
+        // Deserialization binds "Theme" case-insensitively; the legacy-seed check must agree, or a
+        // hand-edited block is thrown away and reseeded from the legacy Player fields.
+        File.WriteAllText(_path,
+            "{\"schemaVersion\":3,\"player\":{\"pinAccent\":\"green\",\"fadeIdleDelayMs\":4000}," +
+            "\"Theme\":{\"themeId\":\"minimal\",\"accentColor\":\"#4D7EA8\",\"fadeDelayPreset\":\"short\"}}");
+
+        var loaded = new SettingsService(_path).Load();
+
+        Assert.Equal("minimal", loaded.Theme.ThemeId);
+        Assert.Equal("#4D7EA8", loaded.Theme.AccentColor);
+        Assert.Equal("short", loaded.Theme.FadeDelayPreset);
+    }
+
+    [Fact]
+    public void Profiles_whose_names_differ_only_by_case_are_kept_under_distinct_names()
+    {
+        // ProfileService finds by name ignoring case, so the second "LO-FI" could never be selected,
+        // edited, or deleted: every command acted on the first. Dropping it would delete it at the
+        // next save; it is renamed instead, past any name already in use.
+        File.WriteAllText(_path,
+            "{\"profiles\":[" +
+            "{\"name\":\"Lo-fi\",\"url\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"}," +
+            "{\"name\":\"LO-FI\",\"url\":\"https://www.youtube.com/watch?v=y6120QOlsfU\"}," +
+            "{\"name\":\"lo-fi\",\"url\":\"https://www.youtube.com/watch?v=aqz-KE-bpKQ\"}," +
+            "{\"name\":\"lo-fi (2)\",\"url\":\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"}," +
+            "{\"name\":\"Jazz\",\"url\":\"https://www.youtube.com/watch?v=y6120QOlsfU\"}]}");
+
+        var loaded = new SettingsService(_path).Load();
+
+        Assert.Equal(new[] { "Lo-fi", "LO-FI (3)", "lo-fi (4)", "lo-fi (2)", "Jazz" }, loaded.Profiles.Select(p => p.Name));
+        Assert.Equal("https://www.youtube.com/watch?v=dQw4w9WgXcQ", ProfileService.Find(loaded, "LO-FI")!.Url);
+        Assert.Equal("https://www.youtube.com/watch?v=y6120QOlsfU", ProfileService.Find(loaded, "lo-fi (3)")!.Url);
+        Assert.Equal("https://www.youtube.com/watch?v=jNQXAC9IVRw", ProfileService.Find(loaded, "LO-FI (2)")!.Url);
+        Assert.True(ProfileService.Remove(loaded, "lo-fi"));
+        Assert.False(ProfileService.Exists(loaded, "Lo-fi"));   // no shadowed twin resurfaces
+        Assert.Equal(4, loaded.Profiles.Count);
     }
 
     [Fact]

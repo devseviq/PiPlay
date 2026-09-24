@@ -21,7 +21,7 @@ public static class YouTubeUrlHelper
         if (string.IsNullOrWhiteSpace(input)) return false;
 
         var text = input.Trim();
-        if (VideoIdRegex.IsMatch(text)) { target.VideoId = text; return true; }
+        if (VideoIdRegex.IsMatch(text) && !LooksLikeWord(text)) { target.VideoId = text; return true; }
 
         if (!text.Contains("://")) text = "https://" + text;
         if (!Uri.TryCreate(text, UriKind.Absolute, out var uri)) return false;
@@ -42,9 +42,12 @@ public static class YouTubeUrlHelper
 
         if (!NavigationPolicy.IsYouTubeHost(host)) return false;
 
-        // Path-based ids: /embed/ID, /shorts/ID, /v/ID, /live/ID
+        // Path-based ids: /embed/ID, /shorts/ID, /v/ID, /live/ID. YouTube's own embed keywords
+        // are 11 characters too: /embed/videoseries?list=... is a playlist embed and
+        // /embed/live_stream?channel=... a channel's live stream, never video ids.
         if (segments.Length >= 2 &&
-            (segments[0] is "embed" or "shorts" or "v" or "live") && IsVideoId(segments[1]))
+            (segments[0] is "embed" or "shorts" or "v" or "live") && IsVideoId(segments[1]) &&
+            !(segments[0] == "embed" && IsReservedEmbedKeyword(segments[1])))
         {
             target.VideoId = segments[1];
         }
@@ -150,6 +153,19 @@ public static class YouTubeUrlHelper
     }
 
     public static bool IsVideoId(string? id) => id is not null && VideoIdRegex.IsMatch(id);
+
+    private static bool IsReservedEmbedKeyword(string segment) =>
+        segment is "videoseries" or "live_stream";
+
+    /// <summary>
+    /// A bare 11-letter input such as "programming" or "Documentary" is a search, not a video id.
+    /// Real ids are random base64: one made only of letters, cased like a word (all lower, all
+    /// upper, or capitalized), is about one in ten thousand, while such words are common searches.
+    /// URLs carrying the id are unaffected.
+    /// </summary>
+    internal static bool LooksLikeWord(string text) =>
+        text.All(char.IsAsciiLetter) &&
+        (text.Skip(1).All(char.IsAsciiLetterLower) || text.All(char.IsAsciiLetterUpper));
 
     /// <summary>
     /// Whether <paramref name="url"/> is a YouTube <c>/watch</c> video page (or a <c>youtu.be</c> share

@@ -127,6 +127,58 @@ public static class PlacementMath
         return data.IsScreenSpace ? r : WorkspaceToScreen(r, primaryWorkArea, toolWindow);
     }
 
+    /// <summary>
+    /// Park a floating window in a corner of <paramref name="work"/>, <paramref name="marginPx"/>
+    /// in from both edges, keeping its size (shrunk only if it cannot fit). The margin keeps the
+    /// result off the work-area edges, so a parked Popout is never classified as snapped and keeps
+    /// its rounded region (ADR-0008).
+    /// </summary>
+    public static RectI AlignToCorner(RectI window, RectI work, ScreenCorner corner, int marginPx)
+    {
+        var margin = Math.Max(0, Math.Min(marginPx, Math.Min(work.Width, work.Height) / 4));
+        var w = Math.Min(window.Width, work.Width - 2 * margin);
+        var h = Math.Min(window.Height, work.Height - 2 * margin);
+
+        var x = corner is ScreenCorner.TopLeft or ScreenCorner.BottomLeft
+            ? work.Left + margin
+            : work.Right - margin - w;
+        var y = corner is ScreenCorner.TopLeft or ScreenCorner.TopRight
+            ? work.Top + margin
+            : work.Bottom - margin - h;
+
+        return new RectI(x, y, x + w, y + h);
+    }
+
+    /// <summary>
+    /// Resize a floating window so its page area is <paramref name="videoWidthPx"/> wide and 16:9.
+    /// <paramref name="chromeWidthPx"/> and <paramref name="chromeHeightPx"/> are the TOTAL window
+    /// space the page does not get on each axis (frame, resize band, and top bar), as measured
+    /// from the live layout. The anchor corner nearest the work-area corner stays put, so a Popout
+    /// parked bottom-right grows up and left; the result is clamped into <paramref name="work"/>.
+    /// </summary>
+    public static RectI ResizeToVideoWidth(
+        RectI window, RectI work, int videoWidthPx, int chromeWidthPx, int chromeHeightPx)
+    {
+        var videoWidth = Math.Max(1, videoWidthPx);
+        var width = videoWidth + Math.Max(0, chromeWidthPx);
+        var height = (int)Math.Round(videoWidth * 9.0 / 16.0) + Math.Max(0, chromeHeightPx);
+
+        var anchorRight = window.Left + window.Width / 2 > work.Left + work.Width / 2;
+        var anchorBottom = window.Top + window.Height / 2 > work.Top + work.Height / 2;
+        var x = anchorRight ? window.Right - width : window.Left;
+        var y = anchorBottom ? window.Bottom - height : window.Top;
+
+        return Clamp(new RectI(x, y, x + width, y + height), work);
+    }
+
     private static RectI Offset(RectI r, int dx, int dy) =>
         new(r.Left + dx, r.Top + dy, r.Right + dx, r.Bottom + dy);
+}
+
+public enum ScreenCorner
+{
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }

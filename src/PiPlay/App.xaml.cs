@@ -74,8 +74,14 @@ public partial class App : Application
     {
         Log.Init();
         Log.Info("PiPlay starting.");
+        // Faults the dispatcher handler never sees (other threads, unobserved tasks) are recorded
+        // only; DispatcherUnhandledException, hooked once this launch is the primary, keeps the
+        // UI-thread dialog policy.
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
-        _mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
+        _mutex = TryCreateSessionMutex(MutexName, out var createdNew,
+            ex => Log.Error("The single-instance mutex could not be opened; this launch can only hand off.", ex));
         if (!createdNew && !TryHandOffOrBecomePrimary(launchUrl))
         {
             // The running instance owns the request (or refused it visibly). Skip base.OnStartup so
@@ -137,6 +143,39 @@ public partial class App : Application
             onStepFailed: (step, ex) => Log.Error($"Shutdown step '{step}' failed.", ex));
         base.OnExit(e);
     }
+
+    /// <summary>
+    /// Create and own the session mutex. The name can exist but refuse this process (another PiPlay
+    /// running elevated holds it, or an object of another type squats it); that is reported through
+    /// <paramref name="onUnavailable"/> and returns null with <paramref name="createdNew"/> false, so
+    /// startup takes the second-launch path: it may hand off, and with no mutex to win it can never
+    /// continue as the primary, ending on the "did not respond" message instead of a crash.
+    /// </summary>
+    internal static Mutex? TryCreateSessionMutex(string name, out bool createdNew, Action<Exception> onUnavailable)
+    {
+        try
+        {
+            return new Mutex(initiallyOwned: true, name, out createdNew);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or WaitHandleCannotBeOpenedException or IOException)
+        {
+            onUnavailable(ex);
+            createdNew = false;
+            return null;
+        }
+    }
+
+    private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        var message = $"Unhandled exception (terminating={e.IsTerminating}).";
+        if (e.ExceptionObject is Exception ex) Log.Error(message, ex);
+        else Log.Error($"{message} {e.ExceptionObject}");
+        // The process ends right after this event; drain the queued writer so the entry lands.
+        if (e.IsTerminating) Log.Shutdown();
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e) =>
+        Log.Error("Unobserved task exception.", e.Exception.GetBaseException());
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
@@ -212,6 +251,9 @@ public partial class App : Application
             onAckUndeliverable: (ack, ex) =>
                 // The sender gave up first; the request itself was already applied or refused.
                 Log.Warn($"Hand-off acknowledgement ({ack}) could not be delivered: {ex.Message}"),
+            onRequestUnusable: ex =>
+                // A client problem, not a server failure: the listener carries on without backoff.
+                Log.Warn($"Hand-off request not applied: {ex.GetType().Name}: {ex.Message}"),
             token);
 
     private async Task<HandoffAck> DispatchHandoffAsync(string? url, CancellationToken token)

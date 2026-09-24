@@ -640,7 +640,28 @@ public class XamlInvariantTests
         Assert.Equal("0", handle.Attribute("Grid.Column")?.Value);
         Assert.Equal("Transparent", handle.Attribute("Background")?.Value);
         Assert.Equal("SizeAll", handle.Attribute("Cursor")?.Value);
-        Assert.Equal("Drag to move popout", handle.Attribute("ToolTip")?.Value);
+        Assert.StartsWith("Drag to move popout", handle.Attribute("ToolTip")?.Value);
+
+        // The handle's menu parks and sizes the Popout (spec 16.4) with the dark menu primitives,
+        // and the strip's buttons opt out of WindowChrome's top resize band.
+        var menu = handle.Descendants(XamlTestFiles.Pres + "ContextMenu").Single();
+        Assert.Equal("{StaticResource DarkContextMenu}", menu.Attribute("Style")?.Value);
+        var items = menu.Elements(XamlTestFiles.Pres + "MenuItem").ToList();
+        Assert.All(items, i => Assert.Equal("{StaticResource DarkMenuItem}", i.Attribute("Style")?.Value));
+        Assert.Equal(
+            new[] { "TopLeft", "TopRight", "BottomLeft", "BottomRight" },
+            items.Where(i => i.Attribute("Click")?.Value == "MoveToCornerMenuItem_Click")
+                .Select(i => i.Attribute("Tag")?.Value));
+        Assert.Equal(3, items.Count(i => i.Attribute("Click")?.Value == "VideoSizeMenuItem_Click"));
+        var accessKeys = items
+            .Select(i => i.Attribute("Header")!.Value)
+            .Select(h => char.ToUpperInvariant(h[h.IndexOf('_') + 1]))
+            .ToList();
+        Assert.Equal(accessKeys.Count, accessKeys.Distinct().Count());
+
+        var buttons = strip.Descendants(XamlTestFiles.Pres + "StackPanel")
+            .Single(e => e.Attribute("Margin")?.Value == $"0,0,{BorderlessResizeHitTestPolicy.ResizeBorderDip},0");
+        Assert.Equal("True", buttons.Attribute("WindowChrome.IsHitTestVisibleInChrome")?.Value);
     }
 
     // --- Opacity sliders pin the policy floor (spec 7.3, Phase 4) ---

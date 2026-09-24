@@ -21,21 +21,21 @@ public class PlayerPinAffordanceTests
             var window = NewPlayer(topmost: false);
             var pin = (ToggleButton)window.FindName("PinToggle")!;
 
-            Assert.Equal("Pin popout on top", pin.ToolTip);
+            Assert.Equal("Pin popout on top (Ctrl+T)", pin.ToolTip);
             Assert.Equal("Pin popout on top", AutomationProperties.GetName(pin));
 
             pin.IsChecked = true;
             pin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
 
             Assert.True(window.Topmost);
-            Assert.Equal("Unpin popout from top", pin.ToolTip);
+            Assert.Equal("Unpin popout from top (Ctrl+T)", pin.ToolTip);
             Assert.Equal("Unpin popout from top", AutomationProperties.GetName(pin));
 
             pin.IsChecked = false;
             pin.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
 
             Assert.False(window.Topmost);
-            Assert.Equal("Pin popout on top", pin.ToolTip);
+            Assert.Equal("Pin popout on top (Ctrl+T)", pin.ToolTip);
             Assert.Equal("Pin popout on top", AutomationProperties.GetName(pin));
         });
 
@@ -48,7 +48,7 @@ public class PlayerPinAffordanceTests
 
             Assert.True(window.Topmost);
             Assert.True(pin.IsChecked);
-            Assert.Equal("Unpin popout from top", pin.ToolTip);
+            Assert.Equal("Unpin popout from top (Ctrl+T)", pin.ToolTip);
             Assert.Equal("Unpin popout from top", AutomationProperties.GetName(pin));
         });
 }

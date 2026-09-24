@@ -331,7 +331,7 @@ Stable promotion remains a separate SND-HOST operation:
    evidence.
 4. Set `PIPLAY_STABLE_ROOT` to the dedicated machine-local Stable directory.
 5. Run `Publish-Stable.ps1`, `Verify-StableDeploy.ps1`, and the deployed UI
-   smoke exactly as documented in the README. A successful exact-source publish
+   smoke exactly as documented in [`RELEASING.md`](RELEASING.md#stable-acceptance). A successful exact-source publish
    creates the local `stable-vX.Y.Z-bN` tag only after pre-tag deploy
    verification.
 6. Complete the attended audio/journey acceptance on the verified deployed copy.

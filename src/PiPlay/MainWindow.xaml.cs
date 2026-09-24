@@ -98,6 +98,7 @@ public partial class MainWindow : Window
     private System.Windows.Threading.DispatcherTimer? _autoTimer;
     private bool _autoTickInProgress;
     private string? _autoLastHandledVideoId;
+    private readonly ShortcutRepeatGate<SourceShortcut> _shortcutGate = new();
     // A failed Auto suppression attempt must not become a successful handled-video latch, but it
     // also must not reopen a prompt every 250 ms. Block only that failed video until Source moves;
     // manual Pop out remains available and clears the block on success.
@@ -171,6 +172,12 @@ public partial class MainWindow : Window
 
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        // A key-up can be lost while another window has focus; never keep a shortcut latched.
+        Deactivated += (_, _) => _shortcutGate.Release();
+        // Ctrl+Shift+P that brought the video back is usually still held when the Source
+        // reactivates: its auto-repeat must not pop the video straight out again.
+        Activated += (_, _) => LatchHeldShortcut(KeyboardShortcutPolicy.HeldToggleForSource(
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
         StateChanged += (_, _) =>
             MaximizeButton.Content = WindowState == WindowState.Maximized ? GlyphRestore : GlyphMaximize;
         SourceInitialized += (_, _) =>
@@ -351,6 +358,7 @@ public partial class MainWindow : Window
         RuntimeRetryButton.Margin = link == RuntimeLinkMode.Primary ? new Thickness(10, 0, 0, 0) : new Thickness(0);
         SourcePlaceholder.IsEnabled = false;
         RuntimeErrorPanel.Visibility = Visibility.Visible;
+        UpdateBrowserSurfaceVisibility();
         RefreshBrowserStateNote();
     }
 
@@ -360,8 +368,21 @@ public partial class MainWindow : Window
         RuntimeRetryButton.IsEnabled = true;
         RuntimeRetryButton.ToolTip = RetryReadyTip;
         SourcePlaceholder.IsEnabled = true;
+        UpdateBrowserSurfaceVisibility();
         RefreshBrowserStateNote();
     }
+
+    /// <summary>
+    /// WPF cannot draw over the WebView2 child HWND (airspace), so any overlay that must be seen
+    /// hides the browser surface: the Source Placeholder while popped out, and the failure panel
+    /// whose heading, Retry, and runtime download would otherwise sit underneath it. Hidden, not
+    /// Collapsed, so the replacement layout and the resize band stay put.
+    /// </summary>
+    private void UpdateBrowserSurfaceVisibility() =>
+        Browser.Visibility =
+            SourcePlaceholder.Visibility == Visibility.Visible || RuntimeErrorPanel.Visibility == Visibility.Visible
+                ? Visibility.Hidden
+                : Visibility.Visible;
 
     /// <summary>
     /// The panel's third line: what Retry (or the automatic restart) will pick up. The pending URL
@@ -973,16 +994,50 @@ public partial class MainWindow : Window
 
     private void HomeButton_Click(object sender, RoutedEventArgs e) => NavigateInternal("https://www.youtube.com/");
 
+    /// <summary>
+    /// Source shortcuts (spec 20): Ctrl+L / F6 focus the address box, Ctrl+Shift+P pops the video
+    /// out or brings it back, and Ctrl+T pins the Source. They also arrive while the page has
+    /// focus: the WPF WebView2 control re-raises accelerator keys as routed key events. Each
+    /// shortcut is only as available as the control it stands for.
+    /// </summary>
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        var focusAddress = e.Key == Key.F6 ||
-                           (e.Key == Key.L && (Keyboard.Modifiers & ModifierKeys.Control) != 0);
-        if (!focusAddress || !SourceCommandsAvailable) return;
-
-        UrlBox.Focus();
-        UrlBox.SelectAll();
-        e.Handled = true;
+        if (e.Handled) return;
+        var shortcut = KeyboardShortcutPolicy.ForSource(
+            KeyboardShortcutInput.Translate(e), KeyboardShortcutInput.Translate(Keyboard.Modifiers));
+        switch (shortcut)
+        {
+            case SourceShortcut.FocusAddress:
+                if (!SourceCommandsAvailable) return;
+                UrlBox.Focus();
+                UrlBox.SelectAll();
+                e.Handled = true;
+                break;
+            case SourceShortcut.ToggleVideoPopout:
+                // Swallow a held chord's repeats so the page never sees them either.
+                if (_shortcutGate.TryBegin(shortcut, e.IsRepeat))
+                    e.Handled = KeyboardShortcutInput.TryClick(PopOutButton);
+                else
+                    e.Handled = true;
+                break;
+            case SourceShortcut.TogglePin:
+                if (_shortcutGate.TryBegin(shortcut, e.IsRepeat))
+                    e.Handled = KeyboardShortcutInput.TryClick(PinToggle);
+                else
+                    e.Handled = true;
+                break;
+        }
     }
+
+    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) => _shortcutGate.Release();
+
+    internal void LatchHeldShortcut(SourceShortcut held)
+    {
+        if (held != SourceShortcut.None) _shortcutGate.TryBegin(held, isRepeat: false);
+    }
+
+    /// <summary>Test seam: whether a Source shortcut would act now (and latch it if so).</summary>
+    internal bool TryBeginShortcutForTests(SourceShortcut shortcut) => _shortcutGate.TryBegin(shortcut, isRepeat: false);
 
     private void SourceToolbar_SizeChanged(object sender, SizeChangedEventArgs e) =>
         ApplySourceToolbarLayout(e.NewSize.Width);
@@ -1080,7 +1135,7 @@ public partial class MainWindow : Window
         var label = pinned
             ? "Unpin Source Window from top"
             : "Pin Source Window on top";
-        PinToggle.ToolTip = label;
+        PinToggle.ToolTip = KeyboardShortcutPolicy.WithGesture(label, KeyboardShortcutPolicy.TogglePinGesture);
         System.Windows.Automation.AutomationProperties.SetName(PinToggle, label);
     }
 
@@ -1119,7 +1174,17 @@ public partial class MainWindow : Window
     {
         _settings.AutoPopout = AutoToggle.IsChecked == true;
         SaveSettings();
+        // Clear the de-dup only when the USER turns Auto on, so it immediately pops the video
+        // already playing. A browser restart also restarts the detector and must keep the key a
+        // return armed, or the returned video pops straight back out (spec 6.1).
+        if (_settings.AutoPopout) ResetAutoDedup();
         UpdateAutoDetector();
+    }
+
+    private void ResetAutoDedup()
+    {
+        _autoLastHandledVideoId = null;
+        _autoSuppressionFailedVideoId = null;
     }
 
     /// <summary>Reflect the Auto setting on the toolbar toggle (no side effects on the detector).</summary>
@@ -1138,9 +1203,6 @@ public partial class MainWindow : Window
                 };
                 _autoTimer.Tick += AutoTimer_Tick;
             }
-            // Clear the de-dup on (re)enable so Auto immediately pops the video already playing.
-            _autoLastHandledVideoId = null;
-            _autoSuppressionFailedVideoId = null;
             _autoTimer.Start();
         }
         else
@@ -1528,6 +1590,10 @@ public partial class MainWindow : Window
         ApplyOpenPlayerAppearance();
         UpdateAutoDetector();   // Auto is off after reset → stop the detector
         LoadProfilesIntoCombo();
+        // Reset is the documented way out of a refused save (spec 12.6). Saving the fresh
+        // defaults through the one save path clears the Settings not saved hint when the reset
+        // lifted the refusal, and keeps it when the reset itself could not write.
+        SaveSettings();
     }
 
     private void ApplyPlayerPreferences(string themeId, string accentColor, int fadeIdleDelayMs, bool compactMode,
@@ -2180,8 +2246,13 @@ public partial class MainWindow : Window
             RestoreSourcePinAfterPopout();
             RestoreSourceAfterReturn();
             if (core is not null)
-                await YouTubeDomBridge.ApplyPlaybackSettingsAsync(
-                    core, launchState?.Volume, launchState?.Muted, launchState?.PlaybackRate);
+            {
+                // Same rule as a return: an unknown mute state unmutes, so suppression's mute
+                // never outlives a launch whose first state read failed (Q-1).
+                var (volume, muted, rate) = ReturnPolicy.ResolveReturnSettings(
+                    null, null, null, launchState?.Volume, launchState?.Muted, launchState?.PlaybackRate);
+                await YouTubeDomBridge.ApplyPlaybackSettingsAsync(core, volume, muted, rate);
+            }
             if (_sourceWasPlayingAtPopout && core is not null) await YouTubeDomBridge.PlayAsync(core);
             Prompt.ShowInfo(this, "Pop out video", PopoutFailedBody);
         }
@@ -2305,16 +2376,17 @@ public partial class MainWindow : Window
         // Bring video back stays enabled through a failure (it closes the Popout and queues the
         // return, spec 14 / ADR-0010); the tooltip must not promise an instant return then (F-4).
         var browserDown = _browserFailed || _browserRecoveryInProgress;
+        const string gesture = KeyboardShortcutPolicy.ToggleVideoPopoutGesture;
         PopOutButton.ToolTip = state switch
         {
             PopoutActionState.Open => browserDown
                 ? "Return playback to the Source Window. The video waits there until the browser is back."
-                : "Return playback to the Source Window",
+                : KeyboardShortcutPolicy.WithGesture("Return playback to the Source Window", gesture),
             PopoutActionState.Returning => "Returning playback to the Source Window",
             PopoutActionState.Clearing => "Pop out video is available after the browser-data clear finishes",
             _ => browserDown || !_browserReady
                 ? "Pop out video is available when the browser is ready"
-                : "Pop out the current video",
+                : KeyboardShortcutPolicy.WithGesture("Pop out the current video", gesture),
         };
         PopOutButton.IsEnabled = state switch
         {
@@ -2372,8 +2444,8 @@ public partial class MainWindow : Window
     {
         // Tier-1 placeholder (spec 13.3): hide the source WebView, show the accent-derived
         // near-black letterbox panel.
-        Browser.Visibility = visible ? Visibility.Hidden : Visibility.Visible;
         SourcePlaceholder.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        UpdateBrowserSurfaceVisibility();
         _sourceNavigationSuspended = visible;
         UpdateSourceCommandAvailability();
 
@@ -2726,6 +2798,11 @@ public partial class MainWindow : Window
     }
 
     internal string? AutoLastHandledVideoIdForTests => _autoLastHandledVideoId;
+    internal void RestartAutoDetectorForTests(bool autoPopout)
+    {
+        _settings.AutoPopout = autoPopout;
+        UpdateAutoDetector();
+    }
     internal PlayerReturnState? PendingReturnReplayForTests => _pendingReturnReplay;
     internal void ReleaseDirectReturnReplayForTests(PlayerReturnState snapshot, WebView2 appliedOn) => ReleaseDirectReturnReplay(snapshot, appliedOn);
 
