@@ -1391,10 +1391,14 @@ public partial class PlayerWindow : Window
         // Keyboard focus on a strip control holds the strip up like the pointer does (spec 7.1):
         // fading a focused Pin or Close would leave Space pressing an invisible button. Only a
         // keyboard user's focus counts; focus a mouse click left behind never holds the strip.
+        var focusInStrip = ChromeStrip.IsKeyboardFocusWithin;
         var stripHasAttention = ChromeStrip.IsMouseOver ||
-            (ChromeStrip.IsKeyboardFocusWithin && InputManager.Current.MostRecentInputDevice is KeyboardDevice);
+            (focusInStrip && InputManager.Current.MostRecentInputDevice is KeyboardDevice);
         if (FadePolicy.ShouldHide(_fadeEnabled, stripHasAttention, _isDragging, idleElapsed: true))
         {
+            // The device check is thread-wide and can be stale (Alt+Tab back, a click in the
+            // Source): whatever placed it, a faded strip never keeps focus. Space goes to YouTube.
+            if (focusInStrip) ReturnFocusToVideo();
             HideControls();
             // Window opacity idles on the SAME tick with the SAME inputs (one idleness definition,
             // spec 7.1–7.3).

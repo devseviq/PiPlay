@@ -39,7 +39,7 @@ Source and Popout Pin values are independent. Source Pin is suspended while the 
 
 ### 7.1 Controls fade
 
-Pointer, keyboard, focus, pause, and movement recovery apply to the Popout chrome; the strip never becomes a second input mode. A keyboard user's focus on a strip control holds the strip up like the pointer does; focus left behind by a mouse click does not. A mouse click on Settings, Pin, Fade, or Expand hands keyboard focus back to the page so Space reaches YouTube; a keyboard press keeps focus on the control. (`PlayerWindow.xaml.cs`.)
+Pointer, keyboard, focus, pause, and movement recovery apply to the Popout chrome; the strip never becomes a second input mode. A keyboard user's focus on a strip control holds the strip up like the pointer does; focus left behind by a mouse click does not, and a strip that fades hands any focus it still holds to the page. A mouse click on Settings, Pin, Fade, or Expand hands keyboard focus back to the page so Space reaches YouTube; a keyboard press keeps focus on the control. (`PlayerWindow.xaml.cs`.)
 
 ### 7.2 Chrome auto-hide
 
@@ -174,7 +174,7 @@ Native `12 DIP` resize band and `96 DIP` diagonal reach; not a `96 x 96` content
 
 `PerMonitorV2` is required; restore the prior monitor when available, otherwise clamp to visible work area. Placement persists screen pixels (`CoordinateSpace = "screen"`); the `WINDOWPLACEMENT` workspace offset is converted at the Win32 boundary and unmarked saved values are read as the legacy workspace-relative capture. (`WindowPlacementService`, `PlacementMath`, `PlacementMathTests`, WPF tests.)
 
-The Popout's drag-handle context menu parks a floating Popout in a corner of its current monitor's work area, `16 DIP` in from both edges so it is never classified as snapped and keeps its rounded region. It also sizes the Popout for a `480`, `640`, or `960 DIP` wide 16:9 page area. The page area is measured from the live layout, without the top bar when strip auto-hide will collapse it, and the corner nearest the work-area corner stays put. Both are unavailable while the Popout is expanded. (`PlacementMath.AlignToCorner`, `PlacementMath.ResizeToVideoWidth`, `WindowPlacementService.TryArrangeFloating`, `PlacementArrangeTests`.)
+The Popout's drag-handle context menu parks a floating Popout in a corner of its current monitor's work area, `16 DIP` in from both edges so it is never classified as snapped and keeps its rounded region. It also sizes the Popout for a `480`, `640`, or `960 DIP` wide 16:9 page area. The page area is measured from the layout on screen when the size is picked, without the top bar when strip auto-hide will collapse it, and the corner nearest the work-area corner stays put; a later layout change, such as the Focused surface activating after its recovery strip was shown, does not resize the Popout again. Both are unavailable while the Popout is expanded. (`PlacementMath.AlignToCorner`, `PlacementMath.ResizeToVideoWidth`, `WindowPlacementService.TryArrangeFloating`, `PlacementArrangeTests`.)
 
 ## 17. Profiles and appearance ownership
 

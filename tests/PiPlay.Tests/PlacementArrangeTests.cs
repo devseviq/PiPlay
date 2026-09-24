@@ -71,11 +71,12 @@ public class PlacementArrangeTests
     }
 
     [Theory]
-    // The Popout's real layout totals (PlayerWindow.xaml): 1 DIP accent edge + 12 DIP resize band
-    // left/right/bottom, plus the 44 DIP strip when it stays up or the Focused 12 DIP top band.
-    [InlineData(480, 26, 58)]   // Standard, strip visible
-    [InlineData(640, 26, 14)]   // strip auto-hide: the steady state has no strip
-    [InlineData(960, 26, 26)]   // Focused inset on all four sides
+    // Layout totals from PlayerWindow.xaml: 1 DIP accent edge + 12 DIP resize band left/right/
+    // bottom, plus the 44 DIP strip while it stays up. The menu is only reachable while the strip
+    // shows, so these are the layouts a preset is measured in.
+    [InlineData(480, 26, 58)]   // strip visible
+    [InlineData(640, 26, 14)]   // strip auto-hide on: sized for the steady state without the strip
+    [InlineData(960, 26, 26)]   // arbitrary totals: the math holds for any measured chrome
     public void Size_presets_leave_exactly_a_sixteen_by_nine_page_for_the_real_chrome(
         int videoWidth, int chromeWidth, int chromeHeight)
     {
