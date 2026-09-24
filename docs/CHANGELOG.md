@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Keyboard shortcuts work while the video has focus. In the main window, Ctrl+Shift+P pops the video out or brings it back, and Ctrl+T pins the window. In the Popout, F11 expands or restores, Ctrl+T pins, Ctrl+W or Ctrl+Shift+P brings the video back, and Esc restores an expanded Popout. Holding a key acts once, and tooltips name the shortcut.
+- Double-click the Popout's top bar to expand or restore it. Right-click the top bar to park the Popout in a screen corner, to size it for Small, Medium, or Large 16:9 video, or to reach Expand, Pin, and Bring video back.
+- The Popout's window title shows the video's name, so the taskbar and Alt+Tab say what is playing.
+- After you click Pin, Fade, or Expand in the Popout, Space goes back to YouTube's play/pause instead of pressing the button again. The top bar stays up while a keyboard user has focus in it.
+- Pausing a video in the Popout, or reaching its end, no longer starts it playing again a moment later.
+- The top edge of the Popout's buttons clicks the button instead of starting a window resize.
+- Dragging the Popout by the video works with swapped (left-handed) mouse buttons.
+- The browser recovery panel, including "WebView2 Runtime is required" with its Retry and download buttons, is now visible. The browser surface used to cover it.
+- After the browser restarts, Auto no longer pops out the video you just brought back.
+- When a pop out fails, the main window's video is no longer left muted.
+- A Popout whose page keeps crashing closes and returns the video without also restarting the main window's healthy browser.
+- Reset app state clears the Settings not saved note.
+- Typing an 11-letter word such as "programming" in the address box searches YouTube instead of opening a missing video. Playlist and live-stream embed links open the playlist or are ignored, instead of opening a video that does not exist.
+- Only Google's own sign-in domains open inside PiPlay. Look-alike domains open in your default browser.
+
 ## 0.14.0-beta.1 — 2026-09-23 (build 40)
 
 Test prerelease for feedback. Live playback/audio and display-scaling acceptance remain pending for this package. Requires Windows x64, the .NET 10 Desktop Runtime, and WebView2 Evergreen; PowerShell 7 is needed for package verification. See the README for setup and known limitations.
