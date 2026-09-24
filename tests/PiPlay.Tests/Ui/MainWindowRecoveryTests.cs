@@ -406,6 +406,7 @@ public class MainWindowRecoveryTests : IDisposable
             window.SetBrowserReadyForTests(true);
             window.RestartAutoDetectorForTests(autoPopout: true);
             Assert.Equal("AAAAAAAAAAA", window.AutoLastHandledVideoIdForTests);
+            window.RestartAutoDetectorForTests(autoPopout: false);   // stop the detector timer
         });
     }
 
