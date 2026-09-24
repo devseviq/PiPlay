@@ -167,4 +167,10 @@ public class BorderlessWindowHelperTests
         Assert.False(active);
         Assert.Equal([true, false], transitions);
     }
+
+    [Theory]
+    [InlineData(false, 0x01)]   // VK_LBUTTON
+    [InlineData(true, 0x02)]    // VK_RBUTTON: swapped buttons make the physical right button primary
+    public void Surface_drag_reads_the_logical_primary_button(bool swapped, int expectedVirtualKey) =>
+        Assert.Equal(expectedVirtualKey, BorderlessWindowHelper.PrimaryButtonVirtualKey(swapped));
 }

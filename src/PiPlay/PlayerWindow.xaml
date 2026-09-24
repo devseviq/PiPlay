@@ -15,7 +15,8 @@
 
   <!-- Borderless media window with native edge/corner resize (spec 16.1, 26.5).
        AllowsTransparency stays False (HwndHost WebView2 airspace). CaptionHeight=0:
-       dragging is handled explicitly on the chrome strip so there's no accidental maximize. -->
+       dragging is handled explicitly on the chrome strip, so the OS caption never maximizes on
+       its own; double-click on the drag handle is PiPlay's explicit expand gesture. -->
   <WindowChrome.WindowChrome>
     <WindowChrome CaptionHeight="0"
                   ResizeBorderThickness="12"
@@ -48,14 +49,44 @@
 
         <!-- A guaranteed full-height handle independent of the YouTube document. Real controls
              remain in the separate right column and keep their ordinary click behavior. -->
+        <!-- Double-click expands or restores; right-click parks the Popout in a corner or sizes
+             it for 16:9 video, and lists the window shortcuts (spec 16.4, 20). -->
         <Border x:Name="ChromeDragHandle" Grid.Column="0" Background="Transparent" Cursor="SizeAll"
-                ToolTip="Drag to move popout">
+                ToolTip="Drag to move popout. Double-click to expand; right-click for corners and sizes.">
+          <Border.ContextMenu>
+            <ContextMenu x:Name="PopoutArrangeMenu" Style="{StaticResource DarkContextMenu}"
+                         Opened="PopoutArrangeMenu_Opened">
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="Move to _top left" Tag="TopLeft"
+                        Click="MoveToCornerMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="Move to top _right" Tag="TopRight"
+                        Click="MoveToCornerMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="Move to _bottom left" Tag="BottomLeft"
+                        Click="MoveToCornerMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="Move to bottom r_ight" Tag="BottomRight"
+                        Click="MoveToCornerMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="_Small video" Tag="480"
+                        InputGestureText="480 × 270" Click="VideoSizeMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="_Medium video" Tag="640"
+                        InputGestureText="640 × 360" Click="VideoSizeMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="_Large video" Tag="960"
+                        InputGestureText="960 × 540" Click="VideoSizeMenuItem_Click" />
+              <MenuItem x:Name="ExpandMenuItem" Style="{StaticResource DarkMenuItem}" Header="_Expand popout"
+                        InputGestureText="F11" Click="ExpandMenuItem_Click" />
+              <MenuItem x:Name="PinMenuItem" Style="{StaticResource DarkMenuItem}" Header="_Pin popout on top"
+                        InputGestureText="Ctrl+T" Click="PinMenuItem_Click" />
+              <MenuItem Style="{StaticResource DarkMenuItem}" Header="Bring video bac_k"
+                        InputGestureText="Ctrl+W" Click="BringBackMenuItem_Click" />
+            </ContextMenu>
+          </Border.ContextMenu>
           <TextBlock Text="PiPlay" Margin="10,0,0,0" VerticalAlignment="Center"
                      FontSize="12" Foreground="{DynamicResource TextSecondary}" />
         </Border>
 
-        <!-- Reserve the outer resize band; otherwise Close consumes the entire top-right corner. -->
-        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0">
+        <!-- Reserve the outer resize band; otherwise Close consumes the entire top-right corner.
+             Opted into chrome hit testing like the Source caption buttons: without it the top
+             12 DIP of every button falls inside WindowChrome's resize border and starts a resize. -->
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,12,0"
+                    WindowChrome.IsHitTestVisibleInChrome="True">
           <Button x:Name="SettingsButton" Style="{StaticResource IconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                   Content="&#xE713;" Click="SettingsButton_Click" ToolTip="Settings"
                   AutomationProperties.Name="Settings" />
@@ -64,17 +95,17 @@
                         ToolTip="Fade the top bar when idle; Settings controls whether its row also hides. Move to the top edge to show it again."
                         AutomationProperties.Name="Fade top bar when idle" />
           <ToggleButton x:Name="PinToggle" Style="{StaticResource PinToggle}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
-                        Content="&#xE840;" Click="PinToggle_Click" ToolTip="Pin on top"
+                        Content="&#xE840;" Click="PinToggle_Click" ToolTip="Pin on top (Ctrl+T)"
                         AutomationProperties.Name="Pin popout on top" />
           <!-- Expand/restore (overhaul Task 4): the one reliable expand path, native and
                mode-agnostic. State-neutral UIA name (MaximizeButton precedent): the glyph and
                tooltip flip Expand/Restore in code, the name must stay true in both states. -->
           <Button x:Name="ExpandButton" Style="{StaticResource IconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
-                  Content="&#xE922;" Click="ExpandButton_Click" ToolTip="Expand popout"
+                  Content="&#xE922;" Click="ExpandButton_Click" ToolTip="Expand popout (F11)"
                   AutomationProperties.Name="Expand or restore popout" />
           <Button x:Name="CloseButton" Style="{StaticResource CloseIconButton}" Width="{DynamicResource DensityIconButtonSize}" Height="{DynamicResource DensityIconButtonSize}"
                   Content="&#xE8BB;" Click="CloseButton_Click"
-                  ToolTip="Bring video back to the Source Window and close the Popout"
+                  ToolTip="Bring video back to the Source Window and close the Popout (Ctrl+W)"
                   AutomationProperties.Name="Close popout" />
         </StackPanel>
       </Grid>

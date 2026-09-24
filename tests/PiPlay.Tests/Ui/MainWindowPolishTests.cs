@@ -174,7 +174,7 @@ public class MainWindowPolishTests
         var button = Named<Button>(window, "PopOutButton");
 
         window.ApplyPopoutActionState(hasPlayer: true);
-        Assert.Equal("Return playback to the Source Window", (string)button.ToolTip);
+        Assert.Equal("Return playback to the Source Window (Ctrl+Shift+P)", (string)button.ToolTip);
 
         window.SetBrowserFailedForTests(true);
         window.ApplyPopoutActionState(hasPlayer: true);
@@ -189,7 +189,7 @@ public class MainWindowPolishTests
 
         window.SetBrowserRecoveryInProgressForTests(false);
         window.ApplyPopoutActionState(hasPlayer: true);
-        Assert.Equal("Return playback to the Source Window", (string)button.ToolTip);
+        Assert.Equal("Return playback to the Source Window (Ctrl+Shift+P)", (string)button.ToolTip);
     });
 
     // --- F-5: Back and Reload need a live core; the address box does not ---

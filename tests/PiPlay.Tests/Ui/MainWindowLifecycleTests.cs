@@ -514,6 +514,11 @@ public class MainWindowLifecycleTests : IDisposable
                 window.SaveSettingsForTests();   // no second signal; the hint stays
                 Assert.True(window.IsSettingsUnsavedHintVisibleForTests);
                 Assert.Equal("{\"schemaVersion\":3}", File.ReadAllText(path));
+
+                // Reset app state is the way out the hint names: once it lifts the refusal the
+                // hint must not keep claiming that settings are not saved.
+                window.ApplyResetState();
+                Assert.False(window.IsSettingsUnsavedHintVisibleForTests);
             }
             finally
             {

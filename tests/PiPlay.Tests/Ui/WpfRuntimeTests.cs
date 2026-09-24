@@ -2166,17 +2166,17 @@ public class WpfRuntimeTests : IDisposable
             // Normal mode deliberately: the native button must serve BOTH playback modes.
             var w = NewPlayer();
             Assert.Equal(GlyphMaximize, w.ExpandGlyphForTests);
-            Assert.Equal("Expand popout", w.ExpandToolTipForTests);
+            Assert.Equal("Expand popout (F11)", w.ExpandToolTipForTests);
 
             ClickExpand(w);
             Assert.Equal(WindowState.Maximized, w.WindowState);
             Assert.Equal(GlyphRestore, w.ExpandGlyphForTests);
-            Assert.Equal("Restore popout", w.ExpandToolTipForTests);
+            Assert.Equal("Restore popout (F11)", w.ExpandToolTipForTests);
 
             ClickExpand(w);
             Assert.Equal(WindowState.Normal, w.WindowState);
             Assert.Equal(GlyphMaximize, w.ExpandGlyphForTests);
-            Assert.Equal("Expand popout", w.ExpandToolTipForTests);
+            Assert.Equal("Expand popout (F11)", w.ExpandToolTipForTests);
         });
 
     [Fact]

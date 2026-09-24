@@ -91,6 +91,46 @@ public static class WindowPlacementService
         }
     }
 
+    /// <summary>
+    /// Move or resize a floating window within its current monitor's work area. The arrange
+    /// function receives the visible frame and the work area in screen pixels plus the window's
+    /// DPI scale, and returns the new visible frame. Invisible DWM borders, if any, are kept.
+    /// </summary>
+    public static bool TryArrangeFloating(Window window, Func<RectI, RectI, double, RectI> arrange)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero || window.WindowState != WindowState.Normal) return false;
+            if (!GetWindowRect(hwnd, out var raw)) return false;
+
+            var visible = raw;
+            if (DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out var frame, Marshal.SizeOf<RECT>()) >= 0
+                && frame.Right > frame.Left && frame.Bottom > frame.Top)
+            {
+                visible = frame;
+            }
+
+            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (!TryGetMonitorInfo(monitor, out var mi)) return false;
+
+            var target = arrange(ToRectI(visible), ToRectI(mi.rcWork), GetDpiScaleSafe(window));
+            if (target.Width <= 0 || target.Height <= 0) return false;
+
+            var left = target.Left - (visible.Left - raw.Left);
+            var top = target.Top - (visible.Top - raw.Top);
+            var right = target.Right + (raw.Right - visible.Right);
+            var bottom = target.Bottom + (raw.Bottom - visible.Bottom);
+            return SetWindowPos(hwnd, IntPtr.Zero, left, top, right - left, bottom - top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Failed to arrange the window.", ex);
+            return false;
+        }
+    }
+
     /// <param name="data">Saved placement (monitor identity and fallback work area).</param>
     /// <param name="screenTarget">The saved bounds already converted to screen pixels.</param>
     private static RECT ResolveWorkArea(PlacementData data, RectI screenTarget)
@@ -174,6 +214,10 @@ public static class WindowPlacementService
     private const int GWL_EXSTYLE = -20;
     private const long WS_EX_TOOLWINDOW = 0x80;
     private const uint SPI_GETWORKAREA = 0x0030;
+    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+    private const uint SWP_NOOWNERZORDER = 0x0200;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
@@ -225,4 +269,16 @@ public static class WindowPlacementService
 
     [DllImport("user32.dll")]
     private static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
 }

@@ -12,7 +12,8 @@
         Background="{DynamicResource AppBackgroundWash}"
         UseLayoutRounding="False"
         SnapsToDevicePixels="True"
-        PreviewKeyDown="MainWindow_PreviewKeyDown">
+        PreviewKeyDown="MainWindow_PreviewKeyDown"
+        PreviewKeyUp="MainWindow_PreviewKeyUp">
   <!-- Custom thin title bar with native resize (spec 5.5). AllowsTransparency stays False:
        a transparent WPF window is incompatible with the HwndHost WebView2 (airspace). -->
   <WindowChrome.WindowChrome>
@@ -186,7 +187,7 @@
 
       <ToggleButton x:Name="PinToggle" Grid.Column="3" Style="{StaticResource PinToggle}"
                     Margin="6,0" Content="&#xE840;" Click="PinToggle_Click"
-                    ToolTip="Pin Source Window on top" AutomationProperties.Name="Pin Source Window on top" />
+                    ToolTip="Pin Source Window on top (Ctrl+T)" AutomationProperties.Name="Pin Source Window on top" />
 
       <ToggleButton x:Name="AutoToggle" Grid.Column="4" Style="{StaticResource PinToggle}"
                     Margin="6,0" Content="&#xE768;" Click="AutoToggle_Click"
@@ -203,7 +204,7 @@
       <!-- ShowOnDisabled (polish review 2026-09-10 F-6): the tooltip names the state that disables it. -->
       <Button x:Name="PopOutButton" Grid.Column="6" Style="{StaticResource AccentButton}"
               Margin="6,6,10,6" Click="PopOutButton_Click" IsEnabled="False"
-              ToolTip="Pop out the current video" ToolTipService.ShowOnDisabled="True"
+              ToolTip="Pop out the current video (Ctrl+Shift+P)" ToolTipService.ShowOnDisabled="True"
               AutomationProperties.Name="Pop out video">
         <StackPanel Orientation="Horizontal">
           <TextBlock x:Name="PopOutButtonIcon" Text="&#xE8A7;"
