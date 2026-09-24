@@ -16,6 +16,8 @@
 - Reset app state clears the Settings not saved note.
 - Typing an 11-letter word such as "programming" in the address box searches YouTube instead of opening a missing video. Playlist and live-stream embed links open the playlist or are ignored, instead of opening a video that does not exist.
 - Only Google's own sign-in domains open inside PiPlay. Look-alike domains open in your default browser.
+- PiPlay's ad check now reads the player that holds the video it writes to. A second, hidden YouTube player on the page can no longer make an ad look finished and let a seek or speed change through.
+- Focused overlay: the controls fade again after you click one, and the progress bar keeps moving after a mouse seek. Next and Captions act only on the playing video's player. Unmute at volume 0 turns the sound back on. The first drag after clicking a control moves the Popout instead of pausing the video.
 
 ## 0.14.0-beta.1 — 2026-09-23 (build 40)
 
