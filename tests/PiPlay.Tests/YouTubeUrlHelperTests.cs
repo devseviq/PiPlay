@@ -19,6 +19,52 @@ public class YouTubeUrlHelperTests
         Assert.Equal(expectedId, target.VideoId);
     }
 
+    [Theory]
+    [InlineData("programming")]
+    [InlineData("documentary")]
+    [InlineData("Photography")]
+    [InlineData("ELECTRONICS")]
+    public void Bare_eleven_letter_words_are_searches_not_video_ids(string input)
+    {
+        // The Source address box searches anything TryParse rejects.
+        Assert.False(YouTubeUrlHelper.TryParse(input, out _));
+    }
+
+    [Theory]
+    [InlineData("dQw4w9WgXcQ")]
+    [InlineData("abcdefghij1")]
+    [InlineData("abc_defghij")]
+    [InlineData("aBcdefghijk")]   // mixed case past the first letter is not a word
+    public void Bare_ids_that_do_not_read_as_words_still_parse(string input)
+    {
+        Assert.True(YouTubeUrlHelper.TryParse(input, out var target));
+        Assert.Equal(input, target.VideoId);
+    }
+
+    [Fact]
+    public void A_word_shaped_id_still_parses_inside_a_url()
+    {
+        Assert.True(YouTubeUrlHelper.TryParse("https://www.youtube.com/watch?v=programming", out var t));
+        Assert.Equal("programming", t.VideoId);
+    }
+
+    [Fact]
+    public void Playlist_embeds_are_playlists_not_a_video_named_videoseries()
+    {
+        Assert.True(YouTubeUrlHelper.TryParse(
+            "https://www.youtube.com/embed/videoseries?list=PLabcdef123", out var t));
+        Assert.Null(t.VideoId);
+        Assert.Equal("PLabcdef123", t.PlaylistId);
+        Assert.Equal("https://www.youtube.com/playlist?list=PLabcdef123", YouTubeUrlHelper.BuildWatchUrl(t));
+    }
+
+    [Fact]
+    public void Channel_live_embeds_are_not_a_video_named_live_stream()
+    {
+        Assert.False(YouTubeUrlHelper.TryParse(
+            "https://www.youtube.com/embed/live_stream?channel=UCabcdefghijklmnopqrstuv", out _));
+    }
+
     [Fact]
     public void Parses_watch_with_playlist_and_timestamp()
     {

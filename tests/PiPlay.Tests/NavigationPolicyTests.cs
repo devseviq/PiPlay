@@ -67,6 +67,15 @@ public class NavigationPolicyTests
 
         // Look-alikes and non-auth Google hosts must not match.
         Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.google.com.evil.test"));
+        // Short registrable domains someone else can own are not Google's regional domains.
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.google.abc.io"));
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("signin.google.xyz.co"));
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("consent.google.evl.me"));
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.google.com.io"));
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.google.co.io"));
+        Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.google.net"));
+        Assert.True(NavigationPolicy.IsGoogleAuthHost("accounts.google.com.au"));
+        Assert.True(NavigationPolicy.IsGoogleAuthHost("accounts.google.co.jp"));
         Assert.False(NavigationPolicy.IsGoogleAuthHost("accounts.notgoogle.com"));
         Assert.False(NavigationPolicy.IsGoogleAuthHost("www.google.com"));
         Assert.False(NavigationPolicy.IsGoogleAuthHost("google.com"));
