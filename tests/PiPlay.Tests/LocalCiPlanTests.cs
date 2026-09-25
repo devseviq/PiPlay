@@ -60,9 +60,18 @@ public class LocalCiPlanTests
     {
         Assert.Equal("pwsh", step.GetProperty("filePath").GetString());
         var arguments = Arguments(step);
+        // Pin the whole argument vector, not just its head: "-File <script>" must be exactly three
+        // arguments, so an added or reordered flag cannot silently slip into a gate step.
+        Assert.Equal(3, arguments.Length);
         Assert.Equal("-NoProfile", arguments[0]);
         Assert.Equal("-File", arguments[1]);
         Assert.Equal(scriptFileName, Path.GetFileName(arguments[2]));
+        Assert.StartsWith(Path.Combine(FindRepoRoot(), "scripts"), arguments[2], StringComparison.Ordinal);
+        // Harnesses take no per-step environment; an undeclared one would be silently ignored by
+        // Invoke-NativeStep, which is exactly the trap the F-8 review flagged.
+        var environment = step.GetProperty("environment");
+        Assert.Equal(JsonValueKind.Object, environment.ValueKind);
+        Assert.False(environment.EnumerateObject().Any());
     }
 
     [Theory]

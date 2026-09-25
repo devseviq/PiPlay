@@ -231,8 +231,10 @@ try {
 # 0. Tag preflight. The stable tag used to be checked only AFTER the test lane, the build, and the
 # destructive deploy - so a colliding tag replaced Stable and only then failed at the very last step.
 # An exact-source publish knows the tag it will create up front (the stamps are already committed), so
-# check it now, while nothing has been touched.
-if (-not $AllowDirty -and -not $AllowVersionBump) {
+# check it now, while nothing has been touched. Only a run that will actually create the tag is
+# preflighted: any diagnostic escape hatch (-AllowDirty, -AllowVersionBump, or -SkipTests) takes the
+# no-tag path, so it must not be blocked by, or announce, a tag it will never create.
+if (-not $AllowDirty -and -not $AllowVersionBump -and -not $SkipTests) {
     Write-Step 0 "Tag preflight (before tests, build, or deploy)..."
     $repoVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -Raw).Trim()
     $repoBuildNumber = (Get-Content -LiteralPath (Join-Path $repoRoot "BUILD_NUMBER") -Raw).Trim()

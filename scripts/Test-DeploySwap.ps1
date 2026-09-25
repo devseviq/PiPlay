@@ -18,7 +18,8 @@
   a mistaken PIPLAY_STABLE_ROOT used to be emptied by a deploy that reported no failure at all
   (readiness review F-1). A foreign root is now refused before it is touched - by the swap, by both
   recovery branches, and by Publish-Stable itself before the lock, the test lane and the build (case N
-  spawns the real script) - while a legitimate first install, redeploy, or mid-swap recovery is not.
+  spawns the real script; N9 holds the deploy-root lock to prove the refusal also beats the lock) -
+  while a legitimate first install, redeploy, or mid-swap recovery is not.
 
   Deploys nothing and touches no real deploy root - everything happens under a temp sandbox.
 
@@ -32,6 +33,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $RepoRoot "scripts\DeploySwap.ps1")
+. (Join-Path $RepoRoot "scripts\PublishLock.ps1")
 
 $sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("DeploySwapTests-" + [guid]::NewGuid().ToString("N"))
 $pass = 0
@@ -443,6 +445,22 @@ try {
     Check "N6 foreign non-empty root refused"       { $refN6.Exit -ne 0 -and $refN6.Text -match 'not a PiPlay install' }
     Check "N7 refusal happens before the lock and preflight" { $refN6.Text -notmatch 'Tag preflight' }
     Check "N8 the foreign root survives the refusal" { Test-Path -LiteralPath (Join-Path $rootN "wedding-photo.jpg") }
+
+    # N9 makes "before the lock" (which N7 only infers from absent prose) an observable property,
+    # so a guard-ordering regression cannot hide. Hold the EXACT per-deploy-root lock Publish-Stable
+    # takes, then invoke it against the same foreign root. With the dedicated check ahead of
+    # New-PublishLock, the child refuses with 'not a PiPlay install' and never touches the mutex;
+    # if the check ever slid behind the lock, the child would block on 'already running' instead.
+    $rootNLockKey = "deploy|" + [System.IO.Path]::GetFullPath($rootN)
+    New-PublishLock -Key $rootNLockKey -What "N9 guard-ordering probe" | Out-Null
+    try {
+        $refN9 = Invoke-PublishStableRefusal -Root $rootN
+    } finally {
+        Close-PublishLocks
+    }
+    Check "N9 refusal precedes the publish lock (guard ordering is behavioral)" {
+        $refN9.Exit -ne 0 -and $refN9.Text -match 'not a PiPlay install' -and $refN9.Text -notmatch 'already running'
+    }
 }
 finally {
     Write-Host ""

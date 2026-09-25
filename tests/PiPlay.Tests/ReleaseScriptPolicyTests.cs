@@ -86,21 +86,196 @@ public class ReleaseScriptPolicyTests
         // PASS" filed as deployed evidence (readiness review F-7). The no-argument form must bind
         // to the deployed copy, and no invocation may skip the identity gate.
         Assert.DoesNotContain(@"bin\publish\latest\PiPlay.exe", script);
-        Assert.DoesNotContain("-ExePath = \"", script);          // no default value on the parameter
+        // A parameter default is declared as "[string]$ExePath = ..." (never "-ExePath"), so the
+        // older dash-prefixed check was vacuous; this regex fires on the buggy shape only.
+        Assert.DoesNotMatch(@"\[string\]\$ExePath\s*=", script);
         Assert.Contains("PIPLAY_STABLE_ROOT", script);
         Assert.Contains("refusing to smoke an arbitrary build", script);
         Assert.Contains("Test-Path -LiteralPath $ExePath", script);
 
-        // The PASS must bind to a publish marker declaring channel=Stable, and the screenshot must
-        // carry that identity in its name.
-        Assert.Contains(".piplay.publish.marker", script);
+        // Relative paths resolve differently per API (session location vs process CWD), so the gate
+        // could vouch for one directory while launching another. One fully-qualified resolution.
+        Assert.Contains("fully qualified absolute path", script);
+
+        // The PASS must bind to a publish marker declaring channel=Stable, every manifest stamp
+        // must agree, and the screenshot must carry that identity in its name.
+        Assert.Contains(".piplay.publish", script);
         Assert.Contains("$marker['channel'] -cne 'Stable'", script);
+        Assert.Contains("'publishLabel'", script);
+        Assert.Contains("'sourceCommit'", script);
+        Assert.Contains("disagree on", script);
         Assert.Contains("ui-smoke-v{0}-b{1}-{2}-{3}.png", script);
 
         // A downloaded package carries no deploy-time marker, so the package verifier - the only
-        // sanctioned way a package enters the smoke - materialises the identity it just hash-verified.
-        Assert.Contains(".piplay.publish.marker", verifier);
-        Assert.Contains("Test-UiSmoke.ps1", verifier);
+        // sanctioned way a package enters the smoke - materialises the identity it just
+        // hash-checked, OUTSIDE the package root (a file written inside would make the next run of
+        // the same extraction fail its exact-inventory check with a false tamper alarm), and passes
+        // it via -MarkerPath; it is removed on every exit path.
+        Assert.Contains("-MarkerPath $smokeMarkerPath", verifier);
+        Assert.Contains("PiPlaySmokeMarker-", verifier);
+        Assert.DoesNotContain("Join-Path $packageRoot '.piplay.publish.marker'", verifier);
+        Assert.Contains("finally", verifier);
+    }
+
+    [Theory]
+    [InlineData("missing-marker", "not a published Stable copy")]
+    [InlineData("wrong-channel", "expected 'Stable'")]
+    [InlineData("malformed-identity", "malformed identity")]
+    [InlineData("relative-exe", "fully qualified absolute path")]
+    [InlineData("disagreeing-manifest", "disagree on sourceCommit")]
+    [InlineData("external-marker-passes-gate", "LAUNCH-MARKER")]
+    public async Task Ui_smoke_identity_gate_refuses_unproven_targets(string shape, string expected)
+    {
+        // The string policy test above pins the TEXT; these cases run the real script so a weakened
+        // gate cannot keep the text and lose the behavior. Every case fails (or, for the positive
+        // control, proceeds) BEFORE the UI matters, so no desktop is needed.
+        var root = Path.Combine(Path.GetTempPath(), "PiPlayUiSmokeGate-" + Guid.NewGuid().ToString("N"));
+        var exeDir = Path.Combine(root, "copy");
+        Directory.CreateDirectory(exeDir);
+        try
+        {
+            var exePath = Path.Combine(exeDir, "PiPlay.exe");
+            await File.WriteAllTextAsync(exePath, "stub-not-a-real-exe");
+            const string goodMarker =
+                "PiPlay marker.\nchannel=Stable\nversion=0.14.0\nbuildNumber=40\n" +
+                "publishLabel=stable-v0.14.0-b40\nsourceCommit=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+                "releaseEvidence=True\n";
+            switch (shape)
+            {
+                case "wrong-channel":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"),
+                        goodMarker.Replace("channel=Stable", "channel=Default"));
+                    break;
+                case "malformed-identity":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"),
+                        goodMarker.Replace("version=0.14.0", @"version=..\evil"));
+                    break;
+                case "disagreeing-manifest":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"), goodMarker);
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, "build-info.json"),
+                        """{"version":"0.14.0","buildNumber":"40","publishLabel":"stable-v0.14.0-b40","sourceCommit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}""");
+                    break;
+                case "external-marker-passes-gate":
+                    await File.WriteAllTextAsync(Path.Combine(root, "verifier-supplied.piplay.publish.marker"), goodMarker);
+                    break;
+            }
+
+            var arguments = new List<string>();
+            arguments.Add("-ExePath");
+            arguments.Add(shape == "relative-exe" ? "PiPlay.exe" : exePath);
+            arguments.Add("-EvidenceDir");
+            arguments.Add(Path.Combine(root, "evidence"));
+            arguments.Add("-DataRoot");
+            arguments.Add(Path.Combine(root, "data"));
+            arguments.Add("-ReadyTimeoutSec");
+            arguments.Add("2");
+            if (shape == "external-marker-passes-gate")
+            {
+                arguments.Add("-MarkerPath");
+                arguments.Add(Path.Combine(root, "verifier-supplied.piplay.publish.marker"));
+            }
+
+            var (exitCode, output, error) = await RunPwshScriptAsync("scripts/Test-UiSmoke.ps1", arguments);
+            // pwsh renders a throw as a box-drawing block that word-wraps mid-phrase and interleaves
+            // '|' gutters, so match on a compacted view that ignores whitespace and pipe columns
+            // rather than the exact line breaks the console happens to insert.
+            var combined = CompactForMatch(output + error);
+
+            if (expected == "LAUNCH-MARKER")
+            {
+                // Positive control: the gate cleared (identity echoed) and the stub died only at the
+                // process launch. Also: the exe directory gained no marker file from the run, and a
+                // non-release marker is loudly flagged rather than refused.
+                Assert.Contains(CompactForMatch("Identity : v0.14.0 b40"), combined);
+                Assert.False(File.Exists(Path.Combine(exeDir, ".piplay.publish.marker")));
+                Assert.DoesNotContain(CompactForMatch("not a published Stable copy"), combined);
+                Assert.DoesNotContain(CompactForMatch("expected 'Stable'"), combined);
+                return;
+            }
+            Assert.NotEqual(0, exitCode);
+            Assert.True(combined.Contains(CompactForMatch(expected), StringComparison.Ordinal),
+                $"COMBINED>>>{combined}<<<");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort fixture cleanup */ }
+        }
+    }
+
+    [Fact]
+    public async Task Ui_smoke_refuses_an_unset_stable_root_and_no_exe_path()
+    {
+        var startInfo = new ProcessStartInfo("pwsh")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = RepoRoot,
+        };
+        startInfo.Environment["NO_COLOR"] = "1";
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(RepoRoot, "scripts", "Test-UiSmoke.ps1"));
+        startInfo.Environment.Remove("PIPLAY_STABLE_ROOT");
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var exit = process.WaitForExitAsync();
+        if (await Task.WhenAny(exit, Task.Delay(TimeSpan.FromSeconds(30))) != exit)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Assert.Fail("UI-smoke unset-root fixture exceeded 30 seconds.");
+        }
+        await exit;
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains(CompactForMatch("refusing to smoke an arbitrary build"),
+            CompactForMatch(await output + await error));
+    }
+
+    private static string CompactForMatch(string value)
+    {
+        // pwsh colorizes error blocks with ANSI CSI sequences even when redirected; strip them,
+        // then the console box-drawing whitespace and '|' gutters, leaving the message bytes only.
+        var noAnsi = System.Text.RegularExpressions.Regex.Replace(
+            value ?? string.Empty, @"\x1B\[[0-9;?]*[ -/]*[@-~]", string.Empty);
+        return new(noAnsi.Where(c => !char.IsWhiteSpace(c) && c != '|').ToArray());
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunPwshScriptAsync(
+        string relativeScript, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo("pwsh")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = RepoRoot,
+        };
+        startInfo.Environment["NO_COLOR"] = "1";   // pwsh emits ANSI CSI in error blocks even when redirected
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(RepoRoot, relativeScript.Replace('/', Path.DirectorySeparatorChar)));
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var exit = process.WaitForExitAsync();
+        if (await Task.WhenAny(exit, Task.Delay(TimeSpan.FromSeconds(30))) != exit)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Assert.Fail($"{relativeScript} exceeded the 30-second gate-fixture budget.");
+        }
+        await exit;
+        return (process.ExitCode, await output, await error);
     }
 
     [Fact]
@@ -162,6 +337,11 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("if ($SkipTests)", publish);
         Assert.Contains("$nonReleaseReasons += \"-SkipTests", publish);
         Assert.Contains("$AllowDirty -or $AllowVersionBump -or $SkipTests", publish);
+
+        // A run that never tags must neither create the tag nor preflight it: step 0 (release-only
+        // collision check) and the summary's "Stable tag" line both exclude -SkipTests, so a
+        // diagnostic publish is never blocked by, or announces, a tag it will not make.
+        Assert.Equal(2, Regex.Matches(publish, @"-not \$AllowVersionBump -and -not \$SkipTests").Count);
 
         // Step 1 must run the shared deterministic CI lane, not a bare `dotnet test`, so the publish
         // gate and the CI gate cannot drift (readiness review F-6).
@@ -321,7 +501,9 @@ public class ReleaseScriptPolicyTests
         Assert.Contains("function Assert-DeployRootIsDedicated", swap);
 
         var staged = swap.IndexOf("function Invoke-StagedDeploy", StringComparison.Ordinal);
-        var stagedAssert = swap.IndexOf("Assert-DeployRootIsDedicated", staged, StringComparison.Ordinal);
+        // Anchor on the CALL form ("... -DeployRoot"), not the bare name: prose and comments also
+        // mention the function, and a bare IndexOf would let a doc-comment stand in for a deleted guard.
+        var stagedAssert = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", staged, StringComparison.Ordinal);
         var rootCreate = swap.IndexOf("New-Item -ItemType Directory -Path $DeployRoot -Force", staged, StringComparison.Ordinal);
         Assert.True(staged >= 0 && stagedAssert >= 0 && rootCreate >= 0, "Invoke-StagedDeploy must gate the root.");
         Assert.True(stagedAssert < rootCreate, "The root must be proven before anything is created or moved in it.");
@@ -332,8 +514,8 @@ public class ReleaseScriptPolicyTests
         var repair = swap.IndexOf("function Repair-InterruptedDeploy", StringComparison.Ordinal);
         var repairEnd = swap.IndexOf("function Test-StagedPayload", repair, StringComparison.Ordinal);
         var repairAsserts = new List<int>();
-        for (var at = swap.IndexOf("Assert-DeployRootIsDedicated", repair, StringComparison.Ordinal);
-             at >= 0 && at < repairEnd; at = swap.IndexOf("Assert-DeployRootIsDedicated", at + 1, StringComparison.Ordinal))
+        for (var at = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", repair, StringComparison.Ordinal);
+             at >= 0 && at < repairEnd; at = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", at + 1, StringComparison.Ordinal))
             repairAsserts.Add(at);
         Assert.True(repairAsserts.Count >= 2, "Both destructive branches of the repair path must gate the root.");
         var stagingDelete = swap.IndexOf("Remove-Item -LiteralPath $paths.Staging -Recurse -Force", repair, StringComparison.Ordinal);
@@ -354,7 +536,7 @@ public class ReleaseScriptPolicyTests
         // build - so a mistyped PIPLAY_STABLE_ROOT cannot even start an expensive run.
         Assert.Contains("Test-PathFullyQualified", publish);
         Assert.Contains("is, contains, or sits inside the repository root", publish);
-        var guard = publish.IndexOf("Assert-DeployRootIsDedicated", StringComparison.Ordinal);
+        var guard = publish.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", StringComparison.Ordinal);
         var lockTaken = publish.IndexOf("New-PublishLock", StringComparison.Ordinal);
         var testGate = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
         Assert.True(guard >= 0 && lockTaken >= 0 && guard < lockTaken, "The deploy-root guard must run before the publish locks.");

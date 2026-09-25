@@ -214,7 +214,7 @@ Automated gate: `scripts/Test-LocalCI.ps1`.
 
 ### 22.2 Deployed UI smoke
 
-`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the deployed Stable executable — no `-ExePath` resolves to `PIPLAY_STABLE_ROOT`, and any target without a sibling publish marker declaring the Stable channel is refused — uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Its screenshot is named with the marker's version, build number, and source commit. Downloaded packages enter it only through the standalone package verifier, which materializes that identity marker from the hash-checked manifest and keeps data and evidence paths outside the immutable package root. Needs an interactive desktop and WebView2.
+`scripts/Test-UiSmoke.ps1` checks `PopOutButton`, `UrlBox`, `CloseButton`, `ProfilesCombo`, and `SettingsButton` against the deployed Stable executable — no `-ExePath` resolves to `PIPLAY_STABLE_ROOT`, the target must be fully qualified, and any copy without a publish marker declaring the Stable channel is refused, with every `build-info.json` stamp required to agree — uses an isolated data root, foregrounds the real HWND in a per-monitor-DPI-aware capture context, and rejects blank/uniform frames. Its screenshot is named with the verified version, build number, and source commit. Downloaded packages enter it only through the standalone package verifier, which materializes that identity marker from the hash-checked manifest outside the package root and passes it by path, keeping package, data, and evidence trees untouched. Needs an interactive desktop and WebView2.
 
 ### 22.3 End-user acceptance
 
