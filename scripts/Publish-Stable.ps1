@@ -8,7 +8,8 @@
     0. takes a publish lock (per repo + per deploy root) so two publishes cannot interleave, and - for
        an exact-source release - PREFLIGHTS the stable tag it is about to create. A tag collision is a
        one-second failure now instead of a failure after the deployed copy has already been replaced;
-    1. (optionally) runs the deterministic test lane as a gate;
+    1. runs the deterministic local CI gate (scripts\Test-LocalCI.ps1 - the exact lane CI runs) as a
+       gate, unless -SkipTests marks the publish diagnostic;
     2. builds + publishes a Release with the Stable channel baked in - giving the deployed copy its
        own data root (PiPlayData beside the exe), its own single-instance identity, and a
        "PiPlay - Stable vX.Y.Z (bN)" title so it is differentiable from the dev app;
@@ -37,8 +38,9 @@
 
   For a non-release local test build that intentionally stamps VERSION/BUILD_NUMBER during the
   publish, pass -AllowVersionBump with -Version/-BuildNumber/-NoVersionBump as needed. For a
-  dirty-tree diagnostic deploy, pass -AllowDirty. Both escape hatches are marked as NOT release
-  evidence in the manifest and verifier output.
+  dirty-tree diagnostic deploy, pass -AllowDirty. To deploy without re-running the CI lane, pass
+  -SkipTests. All three escape hatches are marked as NOT release evidence in the manifest and
+  verifier output, and none of them creates a stable tag.
 
   Optional -SignScript is forwarded to Build-PiPlay.ps1 and runs before final hashes are written,
   so signed bytes can pass manifest verification without post-sign hash drift.
@@ -254,23 +256,16 @@ creation. Choose the version move, edit VERSION/BUILD_NUMBER, commit the stamps,
     }
 }
 
-# 1. Test gate (mirror CI's deterministic lane).
+# 1. Test gate. Run the SAME deterministic lane CI runs (readiness review F-6): a bare
+# `dotnet test` here left the Node version check and the Release-channel build stage out of
+# the publish gate, so a commit could pass publish and fail CI. Skipping the lane is now a
+# diagnostic escape hatch in its own right - see the non-release reasons below.
 if ($SkipTests) {
-    Write-Step 1 "Test gate skipped (-SkipTests)."
+    Write-Step 1 "Test gate skipped (-SkipTests); this publish is NOT release evidence."
 } else {
-    Write-Step 1 "Running deterministic test lane (gate)..."
-    $prevDataRoot = $env:PIPLAY_DATA_ROOT
-    $testDataRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("PiPlayStablePublishTests-" + [guid]::NewGuid().ToString("N"))
-    $env:PIPLAY_DATA_ROOT = $testDataRoot
-    try {
-        & dotnet test (Join-Path $repoRoot "PiPlay.sln") --configuration Debug
-        if ($LASTEXITCODE -ne 0) { throw "Test lane failed; aborting stable publish." }
-    } finally {
-        $env:PIPLAY_DATA_ROOT = $prevDataRoot
-        if (Test-Path -LiteralPath $testDataRoot) {
-            Remove-Item -LiteralPath $testDataRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-Step 1 "Running deterministic test lane (gate): scripts\Test-LocalCI.ps1..."
+    & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File (Join-Path $PSScriptRoot "Test-LocalCI.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Test lane failed; aborting stable publish." }
 }
 
 # 2. Build + publish the Stable channel Release.
@@ -329,6 +324,9 @@ if ($AllowDirty) {
 if ($AllowVersionBump) {
     $nonReleaseReasons += "-AllowVersionBump diagnostic publish: VERSION/BUILD_NUMBER may be stamped after sourceCommit"
 }
+if ($SkipTests) {
+    $nonReleaseReasons += "-SkipTests diagnostic publish: the deterministic test lane never ran"
+}
 if ($nonReleaseReasons.Count -gt 0) {
     $buildParams["NonReleaseReason"] = ($nonReleaseReasons -join "; ")
 }
@@ -347,8 +345,8 @@ if ($buildInfo.channel -ne "Stable") {
 
 # Belt-and-braces: a diagnostic escape hatch must never surface as release evidence even if the
 # reason plumbing above regresses.
-if (($AllowDirty -or $AllowVersionBump) -and $buildInfo.releaseEvidence) {
-    throw "Diagnostic publish (-AllowDirty/-AllowVersionBump) produced releaseEvidence=true; refusing to present a diagnostic deploy as release evidence."
+if (($AllowDirty -or $AllowVersionBump -or $SkipTests) -and $buildInfo.releaseEvidence) {
+    throw "Diagnostic publish (-AllowDirty/-AllowVersionBump/-SkipTests) produced releaseEvidence=true; refusing to present a diagnostic deploy as release evidence."
 }
 
 # 3. Validate publish metadata (SHA256/size integrity) for the freshly built label.
@@ -408,10 +406,10 @@ Invoke-StagedDeploy -DeployRoot $DeployRoot -SourceDir $latestDir -DataFolderNam
 # verify clean against the repo, so a verification failure can never leave a release-looking tag.
 $stableTag = "stable-v$($buildInfo.version)-b$($buildInfo.buildNumber)"
 $verifyScript = Join-Path $PSScriptRoot "Verify-StableDeploy.ps1"
-if ($AllowDirty -or $AllowVersionBump) {
+if ($AllowDirty -or $AllowVersionBump -or $SkipTests) {
     # Diagnostic deploy: no release tag; verify once in diagnostics-only mode.
     Write-Step 5 "Skipping stable tag for non-release evidence deploy."
-    Write-Warning "No stable tag created because -AllowDirty or -AllowVersionBump was used."
+    Write-Warning "No stable tag created because -AllowDirty, -AllowVersionBump, or -SkipTests was used."
 
     Write-Step 6 "Verifying the deployed copy (diagnostics-only)..."
     & $verifyScript -DeployRoot $DeployRoot -AllowNonReleaseEvidence
@@ -440,7 +438,7 @@ if ($buildInfo.sha256) { Write-Host "SHA256       : $($buildInfo.sha256)" }
 if ($buildInfo.sourceCommit) { Write-Host "Commit       : $($buildInfo.sourceCommit)" }
 Write-Host "Release proof: $($buildInfo.releaseEvidence)"
 if (-not $buildInfo.releaseEvidence) { Write-Host "              $($buildInfo.releaseEvidenceReason)" -ForegroundColor Yellow }
-if (-not $AllowDirty -and -not $AllowVersionBump) { Write-Host "Stable tag   : $stableTag" }
+if (-not $AllowDirty -and -not $AllowVersionBump -and -not $SkipTests) { Write-Host "Stable tag   : $stableTag" }
 Write-Host "Deployed exe : $deployExe"
 Write-Host "Data folder  : $(Join-Path $DeployRoot $dataFolderName) (preserved across redeploys)"
 Write-Host "`nRun it:  & '$deployExe'"

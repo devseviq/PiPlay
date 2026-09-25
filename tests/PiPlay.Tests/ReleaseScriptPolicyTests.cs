@@ -152,6 +152,27 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Skip_tests_is_diagnostic_only_and_the_publish_gate_is_the_ci_gate()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+
+        // -SkipTests was the escape hatch that still minted a tag and printed "RELEASE VERIFIED".
+        // It must now (a) feed the non-release reasons, and (b) take the no-tag diagnostics path.
+        Assert.Contains("[switch]$SkipTests", publish);
+        Assert.Contains("if ($SkipTests)", publish);
+        Assert.Contains("$nonReleaseReasons += \"-SkipTests", publish);
+        Assert.Contains("$AllowDirty -or $AllowVersionBump -or $SkipTests", publish);
+
+        // Step 1 must run the shared deterministic CI lane, not a bare `dotnet test`, so the publish
+        // gate and the CI gate cannot drift (readiness review F-6).
+        Assert.Contains("Test-LocalCI.ps1", publish);
+        Assert.DoesNotContain("& dotnet test", publish);
+        var localCi = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        var build = publish.IndexOf("Building + publishing the Stable channel Release", StringComparison.Ordinal);
+        Assert.True(localCi >= 0 && localCi < build, "The CI lane must gate the publish before the build.");
+    }
+
+    [Fact]
     public void Publish_creates_stable_tag_only_after_pretag_verification()
     {
         var publish = Script("scripts/Publish-Stable.ps1");
