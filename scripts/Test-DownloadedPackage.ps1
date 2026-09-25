@@ -375,6 +375,25 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
 $EvidenceDir = Resolve-ExternalDirectory -Path $EvidenceDir -Name 'EvidenceDir' -PackageRoot $packageRoot
 $DataRoot = Resolve-ExternalDirectory -Path $DataRoot -Name 'PIPLAY_DATA_ROOT' -PackageRoot $packageRoot
 
+# The packaged Test-UiSmoke.ps1 binds its SMOKE PASS to a .piplay.publish marker with channel=Stable
+# beside the exe (readiness review F-7) — the file a Publish-Stable deploy writes at swap time. A
+# package has no deploy, so materialise the identity here from the manifest fields this verifier has
+# just hash-checked. This is identity, not evidence: data and screenshots still resolve outside the
+# package root above.
+$smokeMarkerText = @"
+PiPlay package-verification marker (materialized by Test-DownloadedPackage.ps1; safe to clean).
+project=$($buildInfo.project)
+channel=$($buildInfo.channel)
+version=$($buildInfo.version)
+buildNumber=$($buildInfo.buildNumber)
+publishLabel=$($buildInfo.publishLabel)
+sourceCommit=$($buildInfo.sourceCommit)
+releaseEvidence=$($buildInfo.releaseEvidence)
+sourceDirty=$($buildInfo.sourceDirty)
+verifiedUtc=$((Get-Date).ToUniversalTime().ToString('o'))
+"@
+Set-Content -LiteralPath (Join-Path $packageRoot '.piplay.publish.marker') -Value $smokeMarkerText -Encoding UTF8
+
 $smokeScript = Join-Path $packageRoot 'scripts\Test-UiSmoke.ps1'
 & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $smokeScript `
     -ExePath $exePath -EvidenceDir $EvidenceDir -DataRoot $DataRoot -ReadyTimeoutSec $ReadyTimeoutSec

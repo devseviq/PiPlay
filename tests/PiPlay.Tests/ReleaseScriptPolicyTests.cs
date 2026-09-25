@@ -77,6 +77,33 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Ui_smoke_pass_is_bound_to_the_deployed_stable_identity()
+    {
+        var script = Script("scripts/Test-UiSmoke.ps1");
+        var verifier = Script("scripts/Test-DownloadedPackage.ps1");
+
+        // The old default targeted bin\publish\latest, so a stale dev build could yield a "SMOKE
+        // PASS" filed as deployed evidence (readiness review F-7). The no-argument form must bind
+        // to the deployed copy, and no invocation may skip the identity gate.
+        Assert.DoesNotContain(@"bin\publish\latest\PiPlay.exe", script);
+        Assert.DoesNotContain("-ExePath = \"", script);          // no default value on the parameter
+        Assert.Contains("PIPLAY_STABLE_ROOT", script);
+        Assert.Contains("refusing to smoke an arbitrary build", script);
+        Assert.Contains("Test-Path -LiteralPath $ExePath", script);
+
+        // The PASS must bind to a publish marker declaring channel=Stable, and the screenshot must
+        // carry that identity in its name.
+        Assert.Contains(".piplay.publish.marker", script);
+        Assert.Contains("$marker['channel'] -cne 'Stable'", script);
+        Assert.Contains("ui-smoke-v{0}-b{1}-{2}-{3}.png", script);
+
+        // A downloaded package carries no deploy-time marker, so the package verifier - the only
+        // sanctioned way a package enters the smoke - materialises the identity it just hash-verified.
+        Assert.Contains(".piplay.publish.marker", verifier);
+        Assert.Contains("Test-UiSmoke.ps1", verifier);
+    }
+
+    [Fact]
     public void Verify_stable_fails_closed_on_missing_source_commit()
     {
         var script = Script("scripts/Verify-StableDeploy.ps1");

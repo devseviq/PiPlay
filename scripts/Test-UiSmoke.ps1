@@ -1,7 +1,7 @@
 #requires -Version 7
 <#
 .SYNOPSIS
-  Manual end-to-end UI smoke for PiPlay: launches the built exe, asserts key UI elements via
+  Manual end-to-end UI smoke for PiPlay: launches a published Stable exe, asserts key UI elements via
   UI Automation, and captures a screenshot for the final deployed smoke.
 .DESCRIPTION
   Final deployed-window smoke (spec 22.2). NOT part of `dotnet test` — it needs an
@@ -9,13 +9,22 @@
   and captures the rendered window from an isolated data root; real playback/audio acceptance
   remains an end-user check. The capture is per-monitor-DPI aware, foregrounds the actual PiPlay
   HWND, and rejects blank/uniform frames instead of reporting a false pass.
+
+  The PASS is bound to the copy it actually ran (readiness review F-7): with no -ExePath the target
+  is $env:PIPLAY_STABLE_ROOT\PiPlay.exe - the deployed Stable copy - and the run refuses an exe that
+  has no .piplay.publish.marker beside it declaring channel=Stable. That rules out source and
+  bin\publish output, which CLAUDE.md forbids as evidence. A verified package payload gets the same
+  identity from scripts\Test-DownloadedPackage.ps1, which materialises the marker from the manifest
+  it has just checked. The screenshot is named with the marker's version, build number and source
+  commit so filed evidence can never be a stale dev build.
 .EXAMPLE
   pwsh -File scripts/Test-UiSmoke.ps1
+  # Smokes the deployed Stable copy at $env:PIPLAY_STABLE_ROOT\PiPlay.exe.
 .EXAMPLE
-  pwsh -File scripts/Test-UiSmoke.ps1 -ExePath bin\publish\latest\PiPlay.exe
+  pwsh -File scripts/Test-UiSmoke.ps1 -ExePath (Join-Path $env:PIPLAY_STABLE_ROOT 'PiPlay.exe')
 #>
 param(
-    [string]$ExePath = "$PSScriptRoot\..\bin\publish\latest\PiPlay.exe",
+    [string]$ExePath,
     [string]$EvidenceDir = "$PSScriptRoot\..\docs\evidence",
     [string]$DataRoot,
     [int]$ReadyTimeoutSec = 30
@@ -23,9 +32,58 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $ExePath)) {
-    throw "PiPlay.exe not found at '$ExePath'. Build a publish first: .\Build-PiPlay.ps1 -Stage Publish"
+if ([string]::IsNullOrWhiteSpace($ExePath)) {
+    $stableRoot = [Environment]::GetEnvironmentVariable('PIPLAY_STABLE_ROOT')
+    if ([string]::IsNullOrWhiteSpace($stableRoot)) {
+        throw "No -ExePath and PIPLAY_STABLE_ROOT is unset; refusing to smoke an arbitrary build. " +
+              "Set PIPLAY_STABLE_ROOT to the deployed Stable directory (docs\RELEASING.md) or pass " +
+              "-ExePath to a published copy."
+    }
+    $ExePath = Join-Path $stableRoot 'PiPlay.exe'
 }
+if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+    throw "PiPlay.exe not found at '$ExePath'."
+}
+
+$exeDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($ExePath))
+$markerPath = Join-Path $exeDir '.piplay.publish.marker'
+if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+    throw "No .piplay.publish.marker beside '$ExePath': this is not a published Stable copy. " +
+          "Deploy with Publish-Stable.ps1 or verify a downloaded package with Test-DownloadedPackage.ps1, " +
+          "and smoke THAT copy - source and bin output are never evidence (CLAUDE.md)."
+}
+$marker = @{}
+foreach ($line in @(Get-Content -LiteralPath $markerPath)) {
+    $kv = $line -split '=', 2
+    if ($kv.Count -eq 2 -and -not [string]::IsNullOrWhiteSpace($kv[0]) -and -not [string]::IsNullOrWhiteSpace($kv[1])) {
+        $marker[$kv[0].Trim()] = $kv[1].Trim()
+    }
+}
+if ($marker['channel'] -cne 'Stable') {
+    throw "Publish marker beside '$ExePath' declares channel '$($marker['channel'])', expected 'Stable'."
+}
+$identityVersion = [string]$marker['version']
+$identityBuild   = [string]$marker['buildNumber']
+$identityCommit  = [string]$marker['sourceCommit']
+if ([string]::IsNullOrWhiteSpace($identityVersion) -or [string]::IsNullOrWhiteSpace($identityBuild)) {
+    throw "Publish marker beside '$ExePath' carries no version/buildNumber identity to stamp the evidence with."
+}
+
+# A deployed copy also carries build-info.json; where it sits beside the exe, its stamps must agree
+# with the marker, so a stale marker next to freshly swapped bytes cannot stand in for identity.
+$buildInfoPath = Join-Path $exeDir 'build-info.json'
+if (Test-Path -LiteralPath $buildInfoPath -PathType Leaf) {
+    $smokeBuildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+    if ([string]$smokeBuildInfo.version -cne $identityVersion -or
+        [string]$smokeBuildInfo.buildNumber -cne $identityBuild) {
+        throw "Publish marker (v$identityVersion b$identityBuild) disagrees with build-info.json (v$($smokeBuildInfo.version) b$($smokeBuildInfo.buildNumber)) beside '$ExePath'."
+    }
+}
+$commitStamp = if ($identityCommit -match '^[0-9a-fA-F]{7,}$') {
+    $identityCommit.Substring(0, [Math]::Min(12, $identityCommit.Length)).ToLowerInvariant()
+} else { 'no-commit' }
+Write-Host "Smoke target: $([System.IO.Path]::GetFullPath($ExePath))" -ForegroundColor Cyan
+Write-Host "Identity    : v$identityVersion b$identityBuild @ $commitStamp" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
 $ownsDataRoot = [string]::IsNullOrWhiteSpace($DataRoot)
@@ -137,14 +195,16 @@ try {
             throw "Rendered capture is blank or uniform ($($colors.Count) sampled color(s)); refusing a false smoke pass."
         }
 
-        $shot = Join-Path $EvidenceDir ("ui-smoke-{0}.png" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        # Stamped with the identity under test so a filed screenshot can never be a stale dev build.
+        $shot = Join-Path $EvidenceDir ("ui-smoke-v{0}-b{1}-{2}-{3}.png" -f `
+            $identityVersion, $identityBuild, $commitStamp, (Get-Date -Format 'yyyyMMdd-HHmmss'))
         $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
     }
     finally {
         $bmp.Dispose()
     }
     Write-Host "Saved screenshot: $shot" -ForegroundColor Cyan
-    Write-Host "SMOKE PASS" -ForegroundColor Green
+    Write-Host "SMOKE PASS  v$identityVersion b$identityBuild @ $commitStamp" -ForegroundColor Green
 }
 finally {
     if ($null -ne $proc -and -not $proc.HasExited) {
