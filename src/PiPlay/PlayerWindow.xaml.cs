@@ -1193,7 +1193,8 @@ public partial class PlayerWindow : Window
 
     protected override void OnPreviewKeyUp(KeyEventArgs e)
     {
-        _shortcutGate.Release();
+        _shortcutGate.ReleaseUnlessHeld(shortcut => KeyboardShortcutPolicy.IsPopoutToggleHeld(shortcut,
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
         base.OnPreviewKeyUp(e);
     }
 

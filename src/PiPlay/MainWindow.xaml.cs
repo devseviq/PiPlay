@@ -1029,7 +1029,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) => _shortcutGate.Release();
+    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) =>
+        _shortcutGate.ReleaseUnlessHeld(shortcut => KeyboardShortcutPolicy.IsSourceToggleHeld(shortcut,
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
 
     internal void LatchHeldShortcut(SourceShortcut held)
     {
