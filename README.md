@@ -78,7 +78,7 @@ It will never download, re-host, or proxy media. It will never block, skip, or s
 Prerequisites: the .NET SDK from [`global.json`](global.json) (10.0.300 or a later feature band), Node 24 or newer for the page-script tests, and PowerShell 7.
 
 ```powershell
-pwsh -NoProfile -File .\scripts\Test-LocalCI.ps1   # restore, Debug tests, Release build; -Plan prints the steps
+pwsh -NoProfile -File .\scripts\Test-LocalCI.ps1   # restore, Debug tests, Release build, deploy-swap and publish-lock harnesses; -Plan prints the steps
 dotnet run --project src\PiPlay                     # Default channel, data in %LOCALAPPDATA%\PiPlay
 ```
 

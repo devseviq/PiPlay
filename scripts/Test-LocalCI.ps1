@@ -5,8 +5,9 @@
 
 .DESCRIPTION
   Owns the command sequence shared by local development and GitHub Actions:
-  SDK diagnostics, solution restore, the Debug test suite, and the non-mutating
-  Release build gate. Test data is redirected to a unique temporary root and
+  SDK diagnostics, solution restore, the Debug test suite, the PowerShell harnesses for the
+  destructive release scripts (staged deploy swap, cross-process publish lock), and the
+  non-mutating Release build gate. Test data is redirected to a unique temporary root and
   cleaned even when a command fails.
 
 .EXAMPLE
@@ -35,9 +36,11 @@ $testDataRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
 
 function New-LocalCiPlan {
     $buildScript = Join-Path $repoRoot "Build-PiPlay.ps1"
+    $deploySwapTest = Join-Path $repoRoot "scripts\Test-DeploySwap.ps1"
+    $publishLockTest = Join-Path $repoRoot "scripts\Test-PublishLock.ps1"
 
     return [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         repoRoot = $repoRoot
         workingDirectory = $repoRoot
         testDataRoot = $testDataRoot
@@ -85,6 +88,18 @@ function New-LocalCiPlan {
                 arguments = @(
                     "-NoProfile", "-File", $buildScript,
                     "-Stage", "Build", "-NoVersionBump", "-NoBuildNumberBump")
+                environment = [ordered]@{}
+            },
+            [ordered]@{
+                name = "deploy-swap"
+                filePath = "pwsh"
+                arguments = @("-NoProfile", "-File", $deploySwapTest)
+                environment = [ordered]@{}
+            },
+            [ordered]@{
+                name = "publish-lock"
+                filePath = "pwsh"
+                arguments = @("-NoProfile", "-File", $publishLockTest)
                 environment = [ordered]@{}
             }
         )

@@ -13,7 +13,7 @@ public class LocalCiPlanTests
         var first = await RunPlanAsync();
         var second = await RunPlanAsync();
 
-        Assert.Equal(2, first.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, first.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(24, first.GetProperty("requirements").GetProperty("nodeMinimumMajor").GetInt32());
         Assert.Equal("global.json",
             first.GetProperty("requirements").GetProperty("dotnetGlobalJson").GetString());
@@ -30,7 +30,8 @@ public class LocalCiPlanTests
         Assert.False(Directory.Exists(secondRoot));
 
         var steps = first.GetProperty("steps").EnumerateArray().ToArray();
-        Assert.Equal(new[] { "node-version", "dotnet-info", "restore", "test", "build" },
+        Assert.Equal(new[] { "node-version", "dotnet-info", "restore", "test", "build",
+            "deploy-swap", "publish-lock" },
             steps.Select(step => step.GetProperty("name").GetString()).ToArray());
 
         AssertStep(steps[0], "node", "--version");
@@ -47,6 +48,21 @@ public class LocalCiPlanTests
         Assert.Equal("Build-PiPlay.ps1", Path.GetFileName(buildArguments[2]));
         Assert.Equal(new[] { "-Stage", "Build", "-NoVersionBump", "-NoBuildNumberBump" },
             buildArguments[3..]);
+
+        // The two PowerShell harnesses for the destructive release scripts must run inside this
+        // same gate — CI runs only Test-LocalCI.ps1, and a text-shape policy test cannot tell
+        // whether a rollback actually restores or a lock actually lets go (readiness review F-8).
+        AssertHarnessStep(steps[5], "Test-DeploySwap.ps1");
+        AssertHarnessStep(steps[6], "Test-PublishLock.ps1");
+    }
+
+    private static void AssertHarnessStep(JsonElement step, string scriptFileName)
+    {
+        Assert.Equal("pwsh", step.GetProperty("filePath").GetString());
+        var arguments = Arguments(step);
+        Assert.Equal("-NoProfile", arguments[0]);
+        Assert.Equal("-File", arguments[1]);
+        Assert.Equal(scriptFileName, Path.GetFileName(arguments[2]));
     }
 
     [Theory]
