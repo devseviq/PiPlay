@@ -33,7 +33,7 @@ While the Actions policy secret is being provisioned, SND-HOST can use the [loca
 
 ## Stable acceptance
 
-Set `PIPLAY_STABLE_ROOT` to the machine-local Stable directory:
+Set `PIPLAY_STABLE_ROOT` to the machine-local Stable directory. It is dedicated to the deployed copy: the swap moves every other child into a backup that a verified deploy deletes, so `Publish-Stable.ps1` refuses a root that is not missing, empty, `PiPlayData`-only, or an existing PiPlay install, and refuses any root that is, contains, or sits inside the repository. Both refusals happen before the locks, the test lane, and the build. To publish and check a Stable deployment:
 
 ```powershell
 $stableRoot = $env:PIPLAY_STABLE_ROOT

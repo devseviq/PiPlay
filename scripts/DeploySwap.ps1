@@ -22,6 +22,14 @@
   The runtime data folder (PiPlayData) is never staged, moved, or removed - it stays in place across
   the swap, so login/session survive (ADR-0007).
 
+  What gets displaced is constrained the other way round too (Assert-DeployRootIsDedicated): the swap
+  only accepts a root that IS a PiPlay install - a complete payload, a PiPlayData-only or missing
+  directory, or a root whose displaced bytes are still identifiable as this payload's. An unrelated
+  directory that merely happens to be the absolute path PIPLAY_STABLE_ROOT was pointed at is refused
+  before anything is moved, because the backup holding it is deleted once the swap reports success.
+  A genuine install that also holds one-off files deploys, but says so: those files are displaced and
+  deleted with the backup.
+
   Renames are not a transaction: a hard kill (or power loss) between "old moved aside" and "new moved
   in" still leaves the deploy root incomplete. That is what Repair-InterruptedDeploy is for - the next
   publish calls it FIRST and either completes or reverses the interrupted swap before doing anything
@@ -65,6 +73,104 @@ function Test-DeployPayloadComplete {
 
 <#
 .SYNOPSIS
+  Top-level names the deployed build-info.json claims as payload parts, plus the ones it cannot list.
+.DESCRIPTION
+  A real install is far more than PiPlay.exe + build-info.json: runtimes, WebView2, and whatever else
+  the publish emitted sit beside them. The manifest lists exactly those bytes, so its top-level entries
+  - not a hardcoded trio of names - define what counts as 'the payload' when deciding whether a root
+  holds somebody else's files.
+
+  Build-PiPlay deliberately keeps its own metadata out of the manifest (its Get-HashEntries exclusion
+  list), so those names are added here by hand: without them every genuine redeploy would warn that the
+  install it is replacing holds strangers. Keep the two lists in step.
+#>
+function Get-DeployPayloadOwnedNames {
+    param(
+        [Parameter(Mandatory = $true)][string]$DeployRoot,
+        [string]$ExeName = "PiPlay.exe",
+        [string]$MarkerName = ".piplay.publish.marker"
+    )
+
+    $owned = @($ExeName, "build-info.json", "BUILDINFO.json", "VERSION_TABLE.json", $MarkerName)
+    $buildInfoPath = Join-Path $DeployRoot "build-info.json"
+    if (Test-Path -LiteralPath $buildInfoPath) {
+        try {
+            $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+            foreach ($entry in @($buildInfo.artifactHashes)) {
+                $rel = [string]$entry.path
+                if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+                $top = ($rel -split '[\\/]')[0]
+                if ($top -and $owned -notcontains $top) { $owned += $top }
+            }
+        } catch { }   # an unreadable manifest only widens the stranger list; the swap re-hashes anyway
+    }
+    return $owned
+}
+
+<#
+.SYNOPSIS
+  Is this root safe to displace? Only a PiPlay install, a data-folder-only root, or nothing at all.
+.DESCRIPTION
+  The swap consumes the WHOLE deploy root: every child except the runtime data folder is moved into the
+  sibling backup that a SUCCESSFUL deploy then deletes. "Absolute path" is therefore not a safety
+  property - a mistyped or mis-set PIPLAY_STABLE_ROOT would take an unrelated directory's contents with
+  it, and nothing rolls that back (the swap itself succeeded). So the root has to be recognizable as a
+  PiPlay location BEFORE anything destructive runs against it.
+
+  A deploy interrupted mid-swap legitimately leaves payload bytes on both sides of the rename, which is
+  exactly what Repair-InterruptedDeploy cleans up. A caller recovering one passes the staging/backup
+  siblings: whichever of them still carries this payload's own manifest proves the leftovers in the root
+  are PiPlay's and not somebody else's files.
+#>
+function Assert-DeployRootIsDedicated {
+    param(
+        [Parameter(Mandatory = $true)][string]$DeployRoot,
+        [Parameter(Mandatory = $true)][string]$DataFolderName,
+        [string]$ExeName = "PiPlay.exe",
+        [string]$MarkerName = ".piplay.publish.marker",
+        [string[]]$SwapSiblingDirs = @()
+    )
+
+    # Nothing there yet: a first install.
+    if (-not (Test-Path -LiteralPath $DeployRoot)) { return }
+
+    # Still there and runnable: a redeploy over a live copy. A complete payload proves the root is a
+    # PiPlay install, but children its own manifest does not describe are still displaced into the
+    # backup and deleted on success - warn instead of refuse, because operators legitimately leave
+    # one-off files beside an install.
+    if (Test-DeployPayloadComplete -DeployRoot $DeployRoot -ExeName $ExeName) {
+        $owned = Get-DeployPayloadOwnedNames -DeployRoot $DeployRoot -ExeName $ExeName -MarkerName $MarkerName
+        $strangers = @(Get-ChildItem -LiteralPath $DeployRoot -Force |
+            Where-Object { $_.Name -ine $DataFolderName -and $owned -notcontains $_.Name })
+        if ($strangers.Count -gt 0) {
+            $preview = ($strangers | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ", "
+            Write-Warning "Deploy root '$DeployRoot' holds $($strangers.Count) child(ren) its payload manifest does not describe ($preview); the swap displaces them into the backup and deletes it once the deploy verifies."
+        }
+        return
+    }
+
+    # Halfway through a rename the payload is split between the root and its siblings. A sibling that
+    # carries the manifest this script writes next to the exe identifies the whole family as PiPlay's.
+    foreach ($dir in @($SwapSiblingDirs)) {
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        if ((Test-Path -LiteralPath (Join-Path $dir "build-info.json")) -and
+            ((Test-Path -LiteralPath (Join-Path $dir $MarkerName)) -or
+             (Test-Path -LiteralPath (Join-Path $dir $ExeName)))) { return }
+    }
+
+    # The names the pipeline authors - and, when a partial manifest survives, the payload parts it
+    # describes - are PiPlay's even where the payload around them is incomplete.
+    $owned = Get-DeployPayloadOwnedNames -DeployRoot $DeployRoot -ExeName $ExeName -MarkerName $MarkerName
+    $strangers = @(Get-ChildItem -LiteralPath $DeployRoot -Force |
+        Where-Object { $_.Name -ine $DataFolderName -and $owned -notcontains $_.Name })
+    if ($strangers.Count -eq 0) { return }
+
+    $preview = ($strangers | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ", "
+    throw "Deploy root '$DeployRoot' is not a PiPlay install and holds $($strangers.Count) item(s) the swap would delete ($preview). Point PIPLAY_STABLE_ROOT at a dedicated Stable directory (missing or empty is fine), or at an install carrying $ExeName + build-info.json."
+}
+
+<#
+.SYNOPSIS
   Complete or reverse a swap that a previous run was interrupted during. Call before every deploy.
 .OUTPUTS
   $true when leftovers were found and dealt with; $false when the deploy root was already coherent.
@@ -87,6 +193,11 @@ function Repair-InterruptedDeploy {
         } else {
             # The old payload was moved aside and the new one never made it in: restore the old one.
             Write-Warning "Found a leftover deploy backup and an INCOMPLETE deployed copy (interrupted publish); rolling the previous copy back."
+            # This branch DELETES every non-data child of the root, i.e. the same blast radius as the
+            # swap itself, so the root has to be proven PiPlay's here too. The siblings are what make a
+            # half-moved payload provably ours rather than an unrelated directory's contents.
+            Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `
+                -SwapSiblingDirs @($paths.Staging, $paths.Backup)
             foreach ($item in @(Get-ChildItem -LiteralPath $DeployRoot -Force -ErrorAction SilentlyContinue)) {
                 if ($item.Name -ieq $DataFolderName) { continue }
                 Remove-Item -LiteralPath $item.FullName -Recurse -Force
@@ -101,6 +212,11 @@ function Repair-InterruptedDeploy {
 
     if (Test-Path -LiteralPath $paths.Staging) {
         # Staged bytes are never authoritative: they are re-staged from the publish output every run.
+        # Deleting them is still a destructive act against a sibling of a root that may not be ours,
+        # so the same proof is required first: a foreign '<leaf>.staging' next to a foreign root is
+        # somebody else's directory, not deploy debris.
+        Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `
+            -SwapSiblingDirs @($paths.Staging, $paths.Backup)
         Remove-Item -LiteralPath $paths.Staging -Recurse -Force
         $repaired = $true
     }
@@ -240,6 +356,10 @@ function Invoke-StagedDeploy {
 
     if (-not (Test-Path -LiteralPath $SourceDir)) { throw "Publish output not found at $SourceDir." }
     $paths = Get-DeploySwapPaths -DeployRoot $DeployRoot
+    # Nothing past this line may run against a root that is not a dedicated PiPlay location: the swap
+    # below moves every non-data child into the backup, and the cleanup on the success path deletes it.
+    Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `
+        -MarkerName $MarkerName
     New-Item -ItemType Directory -Path $DeployRoot -Force | Out-Null
 
     # 1. STAGE - the slow copy happens beside the live copy, never over it.

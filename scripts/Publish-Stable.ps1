@@ -19,7 +19,10 @@
        payload moved in. A corrupt copy dies before the live copy is touched; a failure mid-swap rolls
        the previous copy back; an interrupted run is completed or reversed on the next publish. The
        PiPlayData runtime folder is never moved, so login/session survive. The .piplay.publish.marker
-       ships inside the payload, so it can never disagree with the bytes it describes;
+       ships inside the payload, so it can never disagree with the bytes it describes. The deploy root
+       itself must be DEDICATED to the deployed copy - missing, empty, PiPlayData-only, or an existing
+       PiPlay install - because everything else in it is displaced and then deleted; a root that is not
+       is refused up front, before the test lane or the build;
     5. for a release publish, runs a PRE-TAG verification of the DEPLOYED copy
        (scripts\Verify-StableDeploy.ps1, post-copy artifact re-hash + repo cross-check), creates the
        stable-vX.Y.Z-bN tag ONLY after that passes, then runs a final full verification that requires
@@ -79,13 +82,35 @@ if ([string]::IsNullOrWhiteSpace($DeployRoot)) {
 . (Join-Path $PSScriptRoot "DeploySwap.ps1")
 . (Join-Path $PSScriptRoot "PublishLock.ps1")
 
+function Test-PathFullyQualified {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # The Windows PowerShell 5.1 equivalent of [System.IO.Path]::IsPathFullyQualified, which does not
+    # exist on the framework this script still has to run on (#Requires -Version 5.1). A path is fully
+    # qualified only when it carries its own drive letter or UNC server+share.
+    $root = [System.IO.Path]::GetPathRoot($Path)
+    return ($root -match '^[A-Za-z]:\\$') -or ($root -match '^\\\\[^\\]+\\[^\\]+$')
+}
+
 if (-not [System.IO.Path]::IsPathRooted($DeployRoot)) {
     # A bare token like '--help' binds positionally to -DeployRoot and would deploy a full
     # publish tree into a junk folder next to this script. Use Get-Help for usage.
     throw "DeployRoot must be an absolute path (got '$DeployRoot'). For usage, run: Get-Help $PSCommandPath"
 }
+if (-not (Test-PathFullyQualified -Path $DeployRoot)) {
+    # IsPathRooted additionally admits the drive-relative forms \foo and D:foo, which resolve against
+    # the CURRENT drive's working directory: the deploy would land somewhere other than what was typed.
+    throw "DeployRoot must be a fully qualified absolute path with its own drive or UNC share (got '$DeployRoot')."
+}
+$DeployRoot = [System.IO.Path]::GetFullPath($DeployRoot)
+if ($DeployRoot.Length -gt 3 -and $DeployRoot.EndsWith("\")) {
+    # 'D:\Stable\' and 'D:\Stable' are the same directory; normalize so the sibling names the swap
+    # derives from the leaf, the deploy-root lock key, and the messages below all agree.
+    $DeployRoot = $DeployRoot.TrimEnd('\')
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRootPrefix = $repoRoot.TrimEnd('\') + '\'      # used by the deploy-root guard and the build-tree stop below
 $buildScript = Join-Path $PSScriptRoot "Build-PiPlay.ps1"
 $metadataScript = Join-Path $PSScriptRoot "Test-PublishMetadata.ps1"
 $publishRoot = Join-Path $repoRoot "bin\publish"
@@ -93,6 +118,33 @@ $latestDir = Join-Path $publishRoot "latest"
 $projectName = "PiPlay"
 $dataFolderName = "PiPlayData"          # must match AppPaths' portable data folder (AppContext.BaseDirectory\PiPlayData)
 $markerName = ".piplay.publish.marker"
+
+# Deploy root: the one input this script cannot undo. The staged swap consumes the WHOLE root - every
+# child except $dataFolderName is moved into a sibling backup that a successful deploy deletes - so an
+# absolute path is not a safety property. It is checked here, ahead of the test lane and the build, so a
+# wrong root is refused before anything expensive runs rather than minutes later at step 4.
+if (-not $SkipDeploy) {
+    $deployPathRoot = [System.IO.Path]::GetPathRoot($DeployRoot)
+    if ($DeployRoot.TrimEnd('\') -ieq $deployPathRoot.TrimEnd('\')) {
+        # A root with no parent has nowhere to keep its .staging/.backup siblings (Get-DeploySwapPaths
+        # refuses it too); never scatter deploy debris across a whole drive or share.
+        throw "DeployRoot must be a directory INSIDE a parent directory (got the root of '$deployPathRoot')."
+    }
+
+    if ($DeployRoot -ieq $repoRoot.TrimEnd('\') -or
+        $DeployRoot.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $repoRootPrefix.StartsWith($DeployRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        # The swap deletes what it displaced once the deploy verifies: a root that overlaps the
+        # repository would take .git and the source tree with it.
+        throw "DeployRoot '$DeployRoot' is, contains, or sits inside the repository root '$repoRoot'. Point PIPLAY_STABLE_ROOT at a dedicated Stable directory outside the repository."
+    }
+
+    # Missing / empty / PiPlayData-only / an existing payload: anything else is somebody else's content.
+    # A half-finished earlier swap is legitimate, so the sibling locations are passed as evidence.
+    $deploySwapPaths = Get-DeploySwapPaths -DeployRoot $DeployRoot
+    Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $dataFolderName -ExeName "$projectName.exe" `
+        -MarkerName $markerName -SwapSiblingDirs @($deploySwapPaths.Staging, $deploySwapPaths.Backup)
+}
 
 function Write-Step([int]$n, [string]$message) { Write-Host "`n[$n] $message" -ForegroundColor Yellow }
 
@@ -228,7 +280,6 @@ Write-Step 2 "Building + publishing the Stable channel Release..."
 # build can overwrite them, but leave a side-by-side dev app (installed / run from elsewhere) and the
 # deployed stable copy running. Build-PiPlay's own stop is blunt (every PiPlay.exe by name), so we disable
 # it below (StopProcessName = '') and scope the stop here, mirroring the deploy step's path-scoped stop.
-$repoRootPrefix = $repoRoot.TrimEnd('\') + '\'
 $stoppedBuildTreeInstance = $false
 foreach ($proc in @(Get-Process -Name $projectName -ErrorAction SilentlyContinue)) {
     try {

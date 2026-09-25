@@ -262,6 +262,58 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Deploy_refuses_a_root_that_is_not_a_dedicated_piplay_install()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+        var swap = Script("scripts/DeploySwap.ps1");
+
+        // The staged swap consumes the WHOLE deploy root and deletes the backup holding what it
+        // displaced, so "absolute path" is not a safety property (readiness review F-1). Every
+        // destructive entry point must first prove the root is a PiPlay location.
+        Assert.Contains("function Assert-DeployRootIsDedicated", swap);
+
+        var staged = swap.IndexOf("function Invoke-StagedDeploy", StringComparison.Ordinal);
+        var stagedAssert = swap.IndexOf("Assert-DeployRootIsDedicated", staged, StringComparison.Ordinal);
+        var rootCreate = swap.IndexOf("New-Item -ItemType Directory -Path $DeployRoot -Force", staged, StringComparison.Ordinal);
+        Assert.True(staged >= 0 && stagedAssert >= 0 && rootCreate >= 0, "Invoke-StagedDeploy must gate the root.");
+        Assert.True(stagedAssert < rootCreate, "The root must be proven before anything is created or moved in it.");
+
+        // Both recovery branches delete too: the roll-back branch clears the root's children and the
+        // staging branch removes the sibling, so each carries the same proof. Bound the search to the
+        // repair function so Invoke-StagedDeploy's own gate cannot stand in for a deleted one.
+        var repair = swap.IndexOf("function Repair-InterruptedDeploy", StringComparison.Ordinal);
+        var repairEnd = swap.IndexOf("function Test-StagedPayload", repair, StringComparison.Ordinal);
+        var repairAsserts = new List<int>();
+        for (var at = swap.IndexOf("Assert-DeployRootIsDedicated", repair, StringComparison.Ordinal);
+             at >= 0 && at < repairEnd; at = swap.IndexOf("Assert-DeployRootIsDedicated", at + 1, StringComparison.Ordinal))
+            repairAsserts.Add(at);
+        Assert.True(repairAsserts.Count >= 2, "Both destructive branches of the repair path must gate the root.");
+        var stagingDelete = swap.IndexOf("Remove-Item -LiteralPath $paths.Staging -Recurse -Force", repair, StringComparison.Ordinal);
+        Assert.True(stagingDelete > repairAsserts[^1], "The staging removal must sit behind its own gate.");
+
+        // What counts as "the payload's own names" comes from the deployed manifest, but Build-PiPlay
+        // deliberately keeps its own metadata out of artifactHashes. Those names must be listed as owned
+        // too, or every genuine redeploy warns about the install's own metadata and the warning that
+        // matters gets ignored with it (scripts\Test-DeploySwap.ps1 cases M4-M6).
+        var excluded = Regex.Match(Script("scripts/Build-PiPlay.ps1"), @"\$excludedNames = @\(([^)]*)\)");
+        Assert.True(excluded.Success, "Build-PiPlay's manifest-exclusion list must be parseable.");
+        var ownedList = Regex.Match(swap, @"\$owned = @\(([^)]*)\)");
+        Assert.True(ownedList.Success, "DeploySwap's payload-owned name list must be parseable.");
+        foreach (var literal in excluded.Groups[1].Value.Split(','))
+            Assert.Contains(literal.Trim().Trim('"'), ownedList.Groups[1].Value);
+
+        // Publish-Stable refuses a wrong root up front - before the locks, the test lane and the
+        // build - so a mistyped PIPLAY_STABLE_ROOT cannot even start an expensive run.
+        Assert.Contains("Test-PathFullyQualified", publish);
+        Assert.Contains("is, contains, or sits inside the repository root", publish);
+        var guard = publish.IndexOf("Assert-DeployRootIsDedicated", StringComparison.Ordinal);
+        var lockTaken = publish.IndexOf("New-PublishLock", StringComparison.Ordinal);
+        var testGate = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        Assert.True(guard >= 0 && lockTaken >= 0 && guard < lockTaken, "The deploy-root guard must run before the publish locks.");
+        Assert.True(guard < testGate, "The deploy-root guard must run before the test lane.");
+    }
+
+    [Fact]
     public void Native_command_helper_owns_benign_stderr_policy()
     {
         var helper = Script("scripts/NativeCommand.ps1");
