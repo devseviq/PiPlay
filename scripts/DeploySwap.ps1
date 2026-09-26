@@ -109,6 +109,25 @@ function Get-DeployPayloadOwnedNames {
 
 <#
 .SYNOPSIS
+  Does this directory carry the payload evidence this pipeline writes beside the exe?
+.DESCRIPTION
+  build-info.json plus the marker (or the exe itself) is the family resemblance test: only this
+  pipeline's staged/backed-up directories carry that pair beside each other.
+#>
+function Test-DirCarriesPayloadEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$Dir,
+        [string]$ExeName = "PiPlay.exe",
+        [string]$MarkerName = ".piplay.publish.marker"
+    )
+
+    return (Test-Path -LiteralPath (Join-Path $Dir "build-info.json")) -and
+        ((Test-Path -LiteralPath (Join-Path $Dir $MarkerName)) -or
+         (Test-Path -LiteralPath (Join-Path $Dir $ExeName)))
+}
+
+<#
+.SYNOPSIS
   Is this root safe to displace? Only a PiPlay install, a data-folder-only root, or nothing at all.
 .DESCRIPTION
   The swap consumes the WHOLE deploy root: every child except the runtime data folder is moved into the
@@ -153,9 +172,7 @@ function Assert-DeployRootIsDedicated {
     # carries the manifest this script writes next to the exe identifies the whole family as PiPlay's.
     foreach ($dir in @($SwapSiblingDirs)) {
         if ([string]::IsNullOrWhiteSpace($dir)) { continue }
-        if ((Test-Path -LiteralPath (Join-Path $dir "build-info.json")) -and
-            ((Test-Path -LiteralPath (Join-Path $dir $MarkerName)) -or
-             (Test-Path -LiteralPath (Join-Path $dir $ExeName)))) { return }
+        if (Test-DirCarriesPayloadEvidence -Dir $dir -ExeName $ExeName -MarkerName $MarkerName) { return }
     }
 
     # The names the pipeline authors - and, when a partial manifest survives, the payload parts it
@@ -214,9 +231,16 @@ function Repair-InterruptedDeploy {
         # Staged bytes are never authoritative: they are re-staged from the publish output every run.
         # Deleting them is still a destructive act against a sibling of a root that may not be ours,
         # so the same proof is required first: a foreign '<leaf>.staging' next to a foreign root is
-        # somebody else's directory, not deploy debris.
-        Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `
-            -SwapSiblingDirs @($paths.Staging, $paths.Backup)
+        # somebody else's directory, not deploy debris. A MISSING root proves nothing (the dedicated
+        # check returns for a first install), so the staging sibling itself must carry the payload.
+        if (-not (Test-Path -LiteralPath $DeployRoot)) {
+            if (-not (Test-DirCarriesPayloadEvidence -Dir $paths.Staging -ExeName $ExeName)) {
+                throw "Deploy root '$DeployRoot' does not exist and the staging sibling '$($paths.Staging)' carries no PiPlay payload (build-info.json + marker or exe); refusing to delete it - it is not this pipeline's debris."
+            }
+        } else {
+            Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `
+                -SwapSiblingDirs @($paths.Staging, $paths.Backup)
+        }
         Remove-Item -LiteralPath $paths.Staging -Recurse -Force
         $repaired = $true
     }

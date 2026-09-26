@@ -370,6 +370,35 @@ try {
     Check "L4 a manifest-less staging beside an install is removed" { -not (Test-Path -LiteralPath $pathsL2.Staging) }
     Check "L5 repair reports it acted"                              { $repairedL2 -eq $true }
 
+    # A MISSING root cannot prove anything (the dedicated check returns for a first install), so the
+    # staging sibling must carry this payload's own manifest before repair deletes it.
+    $rootL3 = Join-Path $sandbox "L3\Documents"
+    $pathsL3 = Get-DeploySwapPaths -DeployRoot $rootL3
+    New-Item -ItemType Directory -Path $pathsL3.Staging -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $pathsL3.Staging "somebody-elses-file.txt") -Value "precious" -Encoding UTF8
+
+    $errL3 = $null
+    try { Repair-InterruptedDeploy -DeployRoot $rootL3 -DataFolderName "PiPlayData" 3>$null | Out-Null }
+    catch { $errL3 = $_.Exception.Message }
+
+    Check "L6 a staging sibling beside a missing root needs payload evidence" {
+        $null -ne $errL3 -and $errL3 -match 'carries no PiPlay payload'
+    }
+    Check "L7 the foreign staging sibling beside a missing root survives" {
+        Test-Path -LiteralPath (Join-Path $pathsL3.Staging "somebody-elses-file.txt")
+    }
+
+    # Genuine staging debris (killed between staging and the swap) IS deleted even beside a missing
+    # root: the manifest it carries is the proof.
+    $rootL4 = Join-Path $sandbox "L4\Documents"
+    $pathsL4 = Get-DeploySwapPaths -DeployRoot $rootL4
+    New-Payload -Dir $pathsL4.Staging -Token "HALFSTAGED"
+
+    $repairedL4 = Repair-InterruptedDeploy -DeployRoot $rootL4 -DataFolderName "PiPlayData" 3>$null
+
+    Check "L8 genuine staging debris beside a missing root is removed" { -not (Test-Path -LiteralPath $pathsL4.Staging) }
+    Check "L9 repair reports it acted" { $repairedL4 -eq $true }
+
     # ------------- M. a complete install with one-off files deploys - but says so before displacing.
     $rootM = Join-Path $sandbox "M\PiPlay"
     $srcM = Join-Path $sandbox "M\src"
