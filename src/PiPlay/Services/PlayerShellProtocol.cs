@@ -162,8 +162,9 @@ public static class PlayerShellProtocol
 
     /// <summary>
     /// Exact top-level schema per message type, mirroring the Focused protocols (readiness A-8):
-    /// membership rejects unknown fields, the count ceiling rejects duplicates. Known fields stay
-    /// optional per type (defaults fill them), preserving the additive-evolution contract.
+    /// membership rejects unknown fields, the seen-mask rejects duplicates (JSON duplicates yield
+    /// multiple properties), and known fields stay optional per type (defaults fill them),
+    /// preserving the additive-evolution contract.
     /// </summary>
     private static bool HasExactSchema(JsonElement root, string? type) => (type ?? "") switch
     {
@@ -177,13 +178,14 @@ public static class PlayerShellProtocol
 
     private static bool HasOnlyFields(JsonElement root, params string[] allowed)
     {
-        var count = 0;
+        int seen = 0;
         foreach (var property in root.EnumerateObject())
         {
-            if (Array.IndexOf(allowed, property.Name) < 0) return false;
-            count++;
+            var index = Array.IndexOf(allowed, property.Name);
+            if (index < 0 || (seen & (1 << index)) != 0) return false;
+            seen |= 1 << index;
         }
-        return count <= allowed.Length;
+        return true;
     }
 
     private static int ReadInt(JsonElement root, string name, int fallback) =>

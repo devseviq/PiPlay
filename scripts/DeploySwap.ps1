@@ -208,7 +208,7 @@ function Repair-InterruptedDeploy {
             # A missing root proves nothing (the dedicated check returns for a first install): the
             # backup sibling itself must carry this payload's manifest before the rollback deletes
             # or empties anything - the same rule the staging branch applies.
-            throw "Deploy root '$DeployRoot' does not exist and the backup sibling '$($paths.Backup)' carries no PiPlay payload (build-info.json + marker or exe); refusing to roll it back - it is not this pipeline's debris."
+            throw "Deploy root '$DeployRoot' does not exist and the backup sibling '$($paths.Backup)' carries no PiPlay payload (build-info.json + marker or exe); refusing to roll it back - it cannot be proven to be this pipeline's debris."
         }
         if (Test-DeployPayloadComplete -DeployRoot $DeployRoot -ExeName $ExeName) {
             # The new payload did land; only the backup cleanup was lost. Keep what is deployed.
@@ -226,6 +226,9 @@ function Repair-InterruptedDeploy {
                 if ($item.Name -ieq $DataFolderName) { continue }
                 Remove-Item -LiteralPath $item.FullName -Recurse -Force
             }
+            # The root can legitimately be missing here (an operator removed the install but left the
+            # backup sibling); the restore needs somewhere to move the old payload back into.
+            New-Item -ItemType Directory -Path $DeployRoot -Force | Out-Null
             foreach ($item in @(Get-ChildItem -LiteralPath $paths.Backup -Force)) {
                 Move-Item -LiteralPath $item.FullName -Destination (Join-Path $DeployRoot $item.Name) -Force
             }
@@ -242,7 +245,7 @@ function Repair-InterruptedDeploy {
         # check returns for a first install), so the staging sibling itself must carry the payload.
         if (-not (Test-Path -LiteralPath $DeployRoot)) {
             if (-not (Test-DirCarriesPayloadEvidence -Dir $paths.Staging -ExeName $ExeName)) {
-                throw "Deploy root '$DeployRoot' does not exist and the staging sibling '$($paths.Staging)' carries no PiPlay payload (build-info.json + marker or exe); refusing to delete it - it is not this pipeline's debris."
+                throw "Deploy root '$DeployRoot' does not exist and the staging sibling '$($paths.Staging)' carries no PiPlay payload (build-info.json + marker or exe); refusing to delete it - it cannot be proven to be this pipeline's debris."
             }
         } else {
             Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $DataFolderName -ExeName $ExeName `

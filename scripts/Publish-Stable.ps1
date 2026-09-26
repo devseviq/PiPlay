@@ -442,7 +442,10 @@ if ($AllowDirty -or $AllowVersionBump -or $SkipTests) {
     if ($LASTEXITCODE -ne 0) {
         # Readiness A-2: the tag was minted two lines ago and nothing release-looking may outlive a
         # failed verification; delete it so the next publish is not blocked by a phantom release.
-        Invoke-Git @("tag", "-d", $stableTag) | Out-Null
+        $tagRemoved = Invoke-Git @("tag", "-d", $stableTag)
+        if ([string]::IsNullOrEmpty($tagRemoved)) {
+            throw "Deployed copy failed final verification and the just-created stable tag '$stableTag' could NOT be deleted - remove it manually (git tag -d $stableTag) before the next publish; do NOT test from it."
+        }
         throw "Deployed copy failed final verification - the just-created stable tag '$stableTag' was deleted; do NOT test from it."
     }
 }

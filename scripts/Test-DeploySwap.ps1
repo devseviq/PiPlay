@@ -317,6 +317,18 @@ try {
         Test-Path -LiteralPath (Join-Path $pathsI2.Backup "somebody-elses-backup.txt")
     }
 
+    # A genuine backup beside a missing root (operator deleted the install, kept the sibling): the
+    # evidence check passes and the rollback recreates the root and restores the old payload.
+    $rootI6 = Join-Path $sandbox "I6\PiPlay"
+    $pathsI6 = Get-DeploySwapPaths -DeployRoot $rootI6
+    New-Payload -Dir $pathsI6.Backup -Token "OLD"
+
+    $repairedI6 = Repair-InterruptedDeploy -DeployRoot $rootI6 -DataFolderName "PiPlayData" 3>$null
+
+    Check "I6 a genuine backup beside a missing root is restored" { (Get-ExeToken $rootI6) -eq "exe-OLD" }
+    Check "I7 the restored copy is runnable" { Test-DeployPayloadComplete -DeployRoot $rootI6 }
+    Check "I8 the backup sibling is consumed" { -not (Test-Path -LiteralPath $pathsI6.Backup) }
+
     # ------------- J. the gate must not refuse the roots a real operator legitimately has.
     $srcJ = Join-Path $sandbox "J\src"
     New-Payload -Dir $srcJ -Token "NEW"
@@ -483,7 +495,7 @@ try {
     $refN2 = Invoke-PublishStableRefusal -Root "\Stable"
     Check "N2 drive-relative root refused"          { $refN2.Exit -ne 0 -and $refN2.Text -match 'fully qualified' }
     $refN10 = Invoke-PublishStableRefusal -Root "Q:foo"
-    Check "N10 drive-relative 'D:foo' form refused at the entry point" { $refN10.Exit -ne 0 -and $refN10.Text -match 'absolute path' }
+    Check "N10 drive-relative 'D:foo'-style path refused at the entry point" { $refN10.Exit -ne 0 -and $refN10.Text -match 'absolute path' }
     $refN3 = Invoke-PublishStableRefusal -Root "C:\"
     Check "N3 drive root refused"                   { $refN3.Exit -ne 0 -and $refN3.Text -match 'INSIDE a parent' }
     $refN4 = Invoke-PublishStableRefusal -Root $RepoRoot

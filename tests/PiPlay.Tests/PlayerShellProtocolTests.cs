@@ -188,6 +188,7 @@ public class PlayerShellProtocolTests
     [InlineData("{\"v\":3,\"type\":\"state\",\"currentTime\":1,\"playerState\":1,\"duration\":10,\"videoId\":\"dQw4w9WgXcQ\",\"extra\":true}")]
     [InlineData("{\"v\":3,\"type\":\"error\",\"code\":\"x\",\"extra\":true}")]
     [InlineData("{\"v\":3,\"type\":\"request\",\"action\":\"close\",\"extra\":true}")]
+    [InlineData("{\"v\":3,\"type\":\"state\",\"currentTime\":1,\"currentTime\":2,\"playerState\":1}")]
     public void Parse_rejects_unknown_top_level_fields(string json)
     {
         Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(json).Kind);
