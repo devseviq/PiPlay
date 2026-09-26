@@ -10,13 +10,16 @@ internal sealed class ConsecutiveFailureGate
     private int _failureCount;
 
     /// <summary>Record one failure. Returns true only for the first failure in the episode.</summary>
-    public bool RecordFailure()
+    public bool RecordFailure() => RecordFailureCount() == 1;
+
+    /// <summary>Record one failure and return the episode's current consecutive-failure count.</summary>
+    public int RecordFailureCount()
     {
         lock (_sync)
         {
             if (_failureCount < int.MaxValue)
                 _failureCount++;
-            return _failureCount == 1;
+            return _failureCount;
         }
     }
 

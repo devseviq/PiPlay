@@ -63,6 +63,10 @@
                    Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
                    Visibility="Collapsed" WindowChrome.IsHitTestVisibleInChrome="True"
                    ToolTip="PiPlay could not read its settings file when it started, so changes made this session are not saved. Reset app state in Settings starts over with defaults." />
+        <TextBlock x:Name="DomBridgeDegradedHint" Text="• Player sync degraded" FontSize="12" Margin="10,0,0,0"
+                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
+                   Visibility="Collapsed" WindowChrome.IsHitTestVisibleInChrome="True"
+                   ToolTip="PiPlay cannot consistently read the YouTube page, so playback transfers may resume at a stale position. Reloading the page (or restarting PiPlay) usually restores it." />
       </StackPanel>
 
       <!-- Caption buttons must opt out of the draggable caption area. -->

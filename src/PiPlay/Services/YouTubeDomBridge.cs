@@ -119,6 +119,27 @@ public static class YouTubeDomBridge
     // Weak keys keep closed/disposed WebViews collectible.
     private static readonly ConditionalWeakTable<CoreWebView2, DomFailureState> FailureStates = new();
 
+    /// <summary>
+    /// Raised with the operation name when its consecutive failures cross the degraded threshold,
+    /// and with null when a degraded operation recovers (readiness A-1: the gate used to coalesce
+    /// log lines only, so persistent failure was invisible in the UI).
+    /// </summary>
+    public static event Action<string?>? DegradedStateChanged;
+
+    private const int DegradedFailureThreshold = 3;
+    private static readonly HashSet<string> DegradedOperations = new(StringComparer.Ordinal);
+    private static readonly object DegradedSync = new();
+
+    private static void MarkDegraded(string operation)
+    {
+        lock (DegradedSync) { DegradedOperations.Add(operation); }
+    }
+
+    private static bool EndDegraded(string operation)
+    {
+        lock (DegradedSync) { return DegradedOperations.Remove(operation); }
+    }
+
     /// <summary>Read current time / paused / duration, or null if no video or the read failed.</summary>
     public static async Task<PlayerState?> ReadPlayerStateAsync(CoreWebView2 webView)
     {
@@ -1160,12 +1181,20 @@ public static class YouTubeDomBridge
             var suppressed = failureState.GateFor(operation).RecordSuccess();
             if (suppressed is int repeatCount)
                 Log.Info($"YouTube DOM {operation} recovered; {repeatCount} repeated failure(s) were suppressed.");
+            if (EndDegraded(operation))
+                DegradedStateChanged?.Invoke(null);
             return new DomExecutionResult(true, value);
         }
         catch (Exception ex)
         {
-            if (failureState.GateFor(operation).RecordFailure())
+            var failureCount = failureState.GateFor(operation).RecordFailureCount();
+            if (failureCount == 1)
                 Log.Error($"YouTube DOM {operation} failed; repeated failures are suppressed until recovery.", ex);
+            if (failureCount == DegradedFailureThreshold)
+            {
+                MarkDegraded(operation);
+                DegradedStateChanged?.Invoke(operation);
+            }
             return new DomExecutionResult(false, null);
         }
     }
