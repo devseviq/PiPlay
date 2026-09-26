@@ -374,6 +374,19 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Publish_deletes_the_just_created_tag_when_final_verification_fails()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+
+        // Readiness A-2: step 6 minted the tag; a step 7 failure must not leave a release-looking
+        // tag behind (the next publish's preflight would treat it as a phantom release).
+        var tagDelete = publish.IndexOf("tag\", \"-d\"", StringComparison.Ordinal);
+        var finalVerify = publish.IndexOf("Final verification (full release checks", StringComparison.Ordinal);
+        Assert.True(tagDelete > finalVerify, "The tag deletion must sit inside the step 7 failure branch.");
+        Assert.Contains("the just-created stable tag", publish);
+    }
+
+    [Fact]
     public void Publish_preflights_the_stable_tag_before_anything_destructive()
     {
         var publish = Script("scripts/Publish-Stable.ps1");

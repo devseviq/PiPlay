@@ -429,7 +429,12 @@ if ($AllowDirty -or $AllowVersionBump -or $SkipTests) {
     # Final gate: full release verification with NO escape hatch; the tag must now be present.
     Write-Step 7 "Final verification (full release checks, stable tag required)..."
     & $verifyScript -DeployRoot $DeployRoot
-    if ($LASTEXITCODE -ne 0) { throw "Deployed copy failed final verification - do NOT test from it." }
+    if ($LASTEXITCODE -ne 0) {
+        # Readiness A-2: the tag was minted two lines ago and nothing release-looking may outlive a
+        # failed verification; delete it so the next publish is not blocked by a phantom release.
+        Invoke-Git @("tag", "-d", $stableTag) | Out-Null
+        throw "Deployed copy failed final verification - the just-created stable tag '$stableTag' was deleted; do NOT test from it."
+    }
 }
 
 Write-Host "`n--- STABLE DEPLOY COMPLETE ---" -ForegroundColor Green

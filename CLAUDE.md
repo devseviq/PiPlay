@@ -12,4 +12,4 @@ For a deployed Stable check, set `PIPLAY_STABLE_ROOT` and pass it to `Publish-St
 
 ## Release stamps
 
-`VERSION` is semantic version; `BUILD_NUMBER` is the publish counter. Exact-source Stable publishing requires committed stamps and a clean tree, creates `stable-vX.Y.Z-bN`, and verifies the deployed manifest before manual acceptance. `-AllowVersionBump`, `-AllowDirty`, and `-SkipTests` are diagnostic-only, never release evidence, and none of them creates a stable tag. Optional signing runs through `-SignScript` before manifest hashes.
+`VERSION` is semantic version; `BUILD_NUMBER` is the publish counter. Exact-source Stable publishing requires committed stamps and a clean tree, creates `stable-vX.Y.Z-bN`, and verifies the deployed manifest before manual acceptance. `-AllowVersionBump`, `-AllowDirty`, and `-SkipTests` are diagnostic-only, never release evidence, and none of them creates a stable tag. Optional signing runs through `-SignScript` before manifest hashes. The stable tag is local-only — the script never pushes it — and a failed final verification deletes the tag the run just created (readiness A-2).
