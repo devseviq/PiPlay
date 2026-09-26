@@ -299,6 +299,24 @@ try {
     Check "I2 the foreign tree survives the refusal"     { Test-Path -LiteralPath (Join-Path $rootI "Taxes2025\return.pdf") }
     Check "I3 the untrusted backup is left intact"       { Test-Path -LiteralPath $pathsI.Backup }
 
+    # A missing root proves nothing in the backup branch either (Task 1 review follow-up): a
+    # foreign '<leaf>.backup' beside a nonexistent root must survive the rollback attempt.
+    $rootI2 = Join-Path $sandbox "I2\Documents"
+    $pathsI2 = Get-DeploySwapPaths -DeployRoot $rootI2
+    New-Item -ItemType Directory -Path $pathsI2.Backup -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $pathsI2.Backup "somebody-elses-backup.txt") -Value "precious" -Encoding UTF8
+
+    $errI2 = $null
+    try { Repair-InterruptedDeploy -DeployRoot $rootI2 -DataFolderName "PiPlayData" 3>$null | Out-Null }
+    catch { $errI2 = $_.Exception.Message }
+
+    Check "I2 a backup sibling beside a missing root needs payload evidence" {
+        $null -ne $errI2 -and $errI2 -match 'carries no PiPlay payload'
+    }
+    Check "I3b the foreign backup sibling beside a missing root survives" {
+        Test-Path -LiteralPath (Join-Path $pathsI2.Backup "somebody-elses-backup.txt")
+    }
+
     # ------------- J. the gate must not refuse the roots a real operator legitimately has.
     $srcJ = Join-Path $sandbox "J\src"
     New-Payload -Dir $srcJ -Token "NEW"

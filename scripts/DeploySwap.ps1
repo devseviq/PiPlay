@@ -203,6 +203,13 @@ function Repair-InterruptedDeploy {
     $repaired = $false
 
     if (Test-Path -LiteralPath $paths.Backup) {
+        if (-not (Test-Path -LiteralPath $DeployRoot) -and
+            -not (Test-DirCarriesPayloadEvidence -Dir $paths.Backup -ExeName $ExeName)) {
+            # A missing root proves nothing (the dedicated check returns for a first install): the
+            # backup sibling itself must carry this payload's manifest before the rollback deletes
+            # or empties anything - the same rule the staging branch applies.
+            throw "Deploy root '$DeployRoot' does not exist and the backup sibling '$($paths.Backup)' carries no PiPlay payload (build-info.json + marker or exe); refusing to roll it back - it is not this pipeline's debris."
+        }
         if (Test-DeployPayloadComplete -DeployRoot $DeployRoot -ExeName $ExeName) {
             # The new payload did land; only the backup cleanup was lost. Keep what is deployed.
             Write-Warning "Found a leftover deploy backup from an interrupted publish; the deployed copy is complete, so the backup is being discarded."
