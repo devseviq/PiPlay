@@ -90,6 +90,10 @@ function Test-PathFullyQualified {
     # The Windows PowerShell 5.1 equivalent of [System.IO.Path]::IsPathFullyQualified, which does not
     # exist on the framework this script still has to run on (#Requires -Version 5.1). A path is fully
     # qualified only when it carries its own drive letter or UNC server+share.
+    # Forward slashes are fully qualified on Windows too ('D:/Stable', '//server/share/x'); normalize
+    # so the drive/UNC root checks accept them instead of rejecting a valid path with a confusing
+    # 'not fully qualified' error.
+    $Path = $Path -replace '/', '\'
     $root = [System.IO.Path]::GetPathRoot($Path)
     return ($root -match '^[A-Za-z]:\\$') -or ($root -match '^\\\\[^\\]+\\[^\\]+$')
 }
@@ -146,6 +150,12 @@ if (-not $SkipDeploy) {
     $deploySwapPaths = Get-DeploySwapPaths -DeployRoot $DeployRoot
     Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $dataFolderName -ExeName "$projectName.exe" `
         -MarkerName $markerName -SwapSiblingDirs @($deploySwapPaths.Staging, $deploySwapPaths.Backup)
+}
+
+# The test lane runs under PowerShell 7; a machine without it used to fail minutes in with a bare
+# CommandNotFoundException. Refuse up front, before the locks, with the actionable message instead.
+if (-not $SkipTests -and -not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+    throw "PowerShell 7 (pwsh) is required for the test lane. Install PowerShell 7 (winget install Microsoft.PowerShell) or pass -SkipTests for a diagnostics-only, non-evidence deploy."
 }
 
 function Write-Step([int]$n, [string]$message) { Write-Host "`n[$n] $message" -ForegroundColor Yellow }

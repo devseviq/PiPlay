@@ -49,6 +49,10 @@ function Resolve-SmokePath {
         [Parameter(Mandatory = $true)][string]$Label
     )
 
+    # Forward slashes are fully qualified on Windows too ('D:/Stable', '//server/share/x'); normalize
+    # so the drive/UNC root checks accept them instead of rejecting a valid path with a confusing
+    # 'not fully qualified' error.
+    $Path = $Path -replace '/', '\'
     $root = [System.IO.Path]::GetPathRoot($Path)
     if (-not (($root -match '^[A-Za-z]:\\$') -or ($root -match '^\\\\[^\\]+\\[^\\]+$'))) {
         throw "$Label must be a fully qualified absolute path with its own drive or UNC share (got '$Path')."

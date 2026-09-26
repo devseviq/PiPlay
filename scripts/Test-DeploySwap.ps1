@@ -310,10 +310,10 @@ try {
     try { Repair-InterruptedDeploy -DeployRoot $rootI2 -DataFolderName "PiPlayData" 3>$null | Out-Null }
     catch { $errI2 = $_.Exception.Message }
 
-    Check "I2 a backup sibling beside a missing root needs payload evidence" {
+    Check "I4 a backup sibling beside a missing root needs payload evidence" {
         $null -ne $errI2 -and $errI2 -match 'carries no PiPlay payload'
     }
-    Check "I3b the foreign backup sibling beside a missing root survives" {
+    Check "I5 the foreign backup sibling beside a missing root survives" {
         Test-Path -LiteralPath (Join-Path $pathsI2.Backup "somebody-elses-backup.txt")
     }
 
@@ -482,6 +482,8 @@ try {
     Check "N1 bare token refused as non-absolute"   { $refN1.Exit -ne 0 -and $refN1.Text -match 'must be an absolute path' }
     $refN2 = Invoke-PublishStableRefusal -Root "\Stable"
     Check "N2 drive-relative root refused"          { $refN2.Exit -ne 0 -and $refN2.Text -match 'fully qualified' }
+    $refN10 = Invoke-PublishStableRefusal -Root "Q:foo"
+    Check "N10 drive-relative 'D:foo' form refused at the entry point" { $refN10.Exit -ne 0 -and $refN10.Text -match 'absolute path' }
     $refN3 = Invoke-PublishStableRefusal -Root "C:\"
     Check "N3 drive root refused"                   { $refN3.Exit -ne 0 -and $refN3.Text -match 'INSIDE a parent' }
     $refN4 = Invoke-PublishStableRefusal -Root $RepoRoot

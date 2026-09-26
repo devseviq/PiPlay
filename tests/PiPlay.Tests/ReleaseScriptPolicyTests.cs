@@ -353,6 +353,22 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Fully_qualified_path_checks_accept_forward_slashes()
+    {
+        Assert.Contains("-replace '/', '\\'", Script("scripts/Publish-Stable.ps1"));
+        Assert.Contains("-replace '/', '\\'", Script("scripts/Test-UiSmoke.ps1"));
+    }
+
+    [Fact]
+    public void Publish_preflights_pwsh_before_the_test_lane()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+        var preflight = publish.IndexOf("Get-Command pwsh -ErrorAction SilentlyContinue", StringComparison.Ordinal);
+        var lane = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        Assert.True(preflight >= 0 && preflight < lane, "The pwsh preflight must precede the test lane.");
+    }
+
+    [Fact]
     public void Publish_creates_stable_tag_only_after_pretag_verification()
     {
         var publish = Script("scripts/Publish-Stable.ps1");
