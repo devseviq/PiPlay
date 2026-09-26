@@ -1241,12 +1241,21 @@ public partial class MainWindow : Window
             }
 
             var isWatchVideo = YouTubeUrlHelper.IsWatchUrl(src);
+            // Readiness A-5: leaving the watch page (SPA or document navigation) drops the dedup key,
+            // so re-opening the same video auto-pops again. Same active-transition guard as below so
+            // a placeholder Source never clears a latch a return still needs.
+            var transitionActive = _popoutInProgress || _returnInProgress || _player is not null;
+            if (AutoPopoutPolicy.ShouldResetDedupOnSourceDeparture(
+                    isWatchVideo, transitionActive, _autoLastHandledVideoId))
+            {
+                _autoLastHandledVideoId = null;
+            }
             if (!AutoPopoutPolicy.NeedsPlayerState(
                     autoEnabled: true,
                     isWatchVideo,
                     currentVideoId: target.VideoId,
                     lastHandledVideoId: _autoLastHandledVideoId,
-                    popoutActive: _popoutInProgress || _returnInProgress || _player is not null))
+                    popoutActive: transitionActive))
             {
                 return;
             }

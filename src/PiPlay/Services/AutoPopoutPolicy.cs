@@ -50,4 +50,13 @@ public static class AutoPopoutPolicy
         if (!isPlaying) return AutoPopDecision.Skip;
         return AutoPopDecision.Pop;
     }
+
+    /// <summary>
+    /// A Source that has left its watch page entirely (home, search, a channel) ends the
+    /// once-per-video latch: navigating back to that video must auto-pop again (readiness A-5).
+    /// While a popout/return transition is active the Source is the placeholder, not "left".
+    /// </summary>
+    public static bool ShouldResetDedupOnSourceDeparture(
+        bool isWatchVideo, bool transitionActive, string? lastHandledVideoId) =>
+        lastHandledVideoId is not null && !isWatchVideo && !transitionActive;
 }
