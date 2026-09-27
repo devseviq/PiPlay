@@ -118,6 +118,7 @@ public static class YouTubeDomBridge
     // (for example, a healthy 4 Hz player-state read beside a failing 1 Hz Source suppression).
     // Weak keys keep closed/disposed WebViews collectible.
     private static readonly ConditionalWeakTable<CoreWebView2, DomFailureState> FailureStates = new();
+    private static readonly object FailureStateSync = new();
 
     /// <summary>
     /// Raised with the operation name when its consecutive failures on one surface cross the
@@ -139,9 +140,15 @@ public static class YouTubeDomBridge
     /// </summary>
     public static void ForgetSurface(CoreWebView2? webView)
     {
-        if (webView is null || !FailureStates.TryGetValue(webView, out var failureState)) return;
-        FailureStates.Remove(webView);
-        if (DegradedTracker.ReleaseSurface(failureState.SurfaceId))
+        if (webView is null) return;
+        bool cleared;
+        lock (FailureStateSync)
+        {
+            if (!FailureStates.TryGetValue(webView, out var failureState)) return;
+            FailureStates.Remove(webView);
+            cleared = DegradedTracker.ReleaseSurface(failureState.SurfaceId);
+        }
+        if (cleared)
             DegradedStateChanged?.Invoke(null);
     }
 
@@ -1176,7 +1183,16 @@ public static class YouTubeDomBridge
         string script,
         string operation)
     {
-        var failureState = FailureStates.GetOrCreateValue(webView);
+        DomFailureState failureState;
+        lock (FailureStateSync)
+        {
+            if (!FailureStates.TryGetValue(webView, out failureState!))
+            {
+                failureState = new DomFailureState();
+                FailureStates.Add(webView, failureState);
+                DegradedTracker.RegisterSurface(failureState.SurfaceId);
+            }
+        }
         try
         {
             var value = await AsyncOperationDeadline.RunSingleFlightAsync(

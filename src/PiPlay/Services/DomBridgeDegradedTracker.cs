@@ -14,7 +14,14 @@ internal sealed class DomBridgeDegradedTracker
     public const int FailureThreshold = 3;
 
     private readonly object _sync = new();
+    private readonly HashSet<Guid> _activeSurfaces = new();
     private readonly HashSet<string> _degraded = new(StringComparer.Ordinal);
+
+    /// <summary>Begin tracking a live WebView surface before its first DOM operation.</summary>
+    public void RegisterSurface(Guid surfaceId)
+    {
+        lock (_sync) _activeSurfaces.Add(surfaceId);
+    }
 
     /// <summary>
     /// Record that (surface, operation) just reached this many consecutive failures. Returns the
@@ -26,6 +33,7 @@ internal sealed class DomBridgeDegradedTracker
         if (failureCount < FailureThreshold) return null;
         lock (_sync)
         {
+            if (!_activeSurfaces.Contains(surfaceId)) return null;
             if (!_degraded.Add(Key(surfaceId, operation))) return null;
         }
         return operation;
@@ -39,6 +47,7 @@ internal sealed class DomBridgeDegradedTracker
     {
         lock (_sync)
         {
+            if (!_activeSurfaces.Contains(surfaceId)) return false;
             if (!_degraded.Remove(Key(surfaceId, operation))) return false;
             return _degraded.Count == 0;
         }
@@ -55,6 +64,7 @@ internal sealed class DomBridgeDegradedTracker
         var prefix = $"{surfaceId}|";
         lock (_sync)
         {
+            if (!_activeSurfaces.Remove(surfaceId)) return false;
             var removed = _degraded.RemoveWhere(key => key.StartsWith(prefix, StringComparison.Ordinal));
             return removed > 0 && _degraded.Count == 0;
         }
