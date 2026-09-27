@@ -138,8 +138,9 @@ function Test-DirCarriesPayloadEvidence {
 
   A deploy interrupted mid-swap legitimately leaves payload bytes on both sides of the rename, which is
   exactly what Repair-InterruptedDeploy cleans up. A caller recovering one passes the staging/backup
-  siblings: whichever of them still carries this payload's own manifest proves the leftovers in the root
-  are PiPlay's and not somebody else's files.
+  siblings: whichever of them still carries this payload's own manifest lends its manifest's names to
+  the root, so the leftovers it describes count as PiPlay's. A sibling never vouches for a root child
+  that no manifest describes.
 #>
 function Assert-DeployRootIsDedicated {
     param(
@@ -168,21 +169,33 @@ function Assert-DeployRootIsDedicated {
         return
     }
 
-    # Halfway through a rename the payload is split between the root and its siblings. A sibling that
-    # carries the manifest this script writes next to the exe identifies the whole family as PiPlay's.
-    foreach ($dir in @($SwapSiblingDirs)) {
-        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
-        if (Test-DirCarriesPayloadEvidence -Dir $dir -ExeName $ExeName -MarkerName $MarkerName) { return }
-    }
-
     # The names the pipeline authors - and, when a partial manifest survives, the payload parts it
     # describes - are PiPlay's even where the payload around them is incomplete.
-    $owned = Get-DeployPayloadOwnedNames -DeployRoot $DeployRoot -ExeName $ExeName -MarkerName $MarkerName
+    $owned = @(Get-DeployPayloadOwnedNames -DeployRoot $DeployRoot -ExeName $ExeName -MarkerName $MarkerName)
+
+    # Halfway through a rename the payload is split between the root and its siblings, and the
+    # manifest can sit on either side. A sibling carrying this pipeline's payload evidence proves the
+    # family is PiPlay's, so the parts ITS manifest describes count as owned too - but it vouches
+    # only for those names: anything in the root that no manifest describes is still a stranger the
+    # rollback would delete.
+    $siblingEvidence = $false
+    foreach ($dir in @($SwapSiblingDirs)) {
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        if (-not (Test-DirCarriesPayloadEvidence -Dir $dir -ExeName $ExeName -MarkerName $MarkerName)) { continue }
+        $siblingEvidence = $true
+        foreach ($name in @(Get-DeployPayloadOwnedNames -DeployRoot $dir -ExeName $ExeName -MarkerName $MarkerName)) {
+            if ($owned -notcontains $name) { $owned += $name }
+        }
+    }
+
     $strangers = @(Get-ChildItem -LiteralPath $DeployRoot -Force |
         Where-Object { $_.Name -ine $DataFolderName -and $owned -notcontains $_.Name })
     if ($strangers.Count -eq 0) { return }
 
     $preview = ($strangers | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ", "
+    if ($siblingEvidence) {
+        throw "Deploy root '$DeployRoot' is not a PiPlay install on its own: an interrupted deploy left payload siblings beside it, but the root also holds $($strangers.Count) item(s) no payload manifest describes ($preview), which the recovery would delete. Move them out of the root and re-run the publish."
+    }
     throw "Deploy root '$DeployRoot' is not a PiPlay install and holds $($strangers.Count) item(s) the swap would delete ($preview). Point PIPLAY_STABLE_ROOT at a dedicated Stable directory (missing or empty is fine), or at an install carrying $ExeName + build-info.json."
 }
 

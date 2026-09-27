@@ -368,6 +368,27 @@ try {
     Check "K3 runtime data survived the interruption"    { Test-DataPreserved $rootK }
     Check "K4 leftovers cleared"                         { Test-NoLeftovers $rootK }
 
+    # A genuine backup sibling proves the FAMILY is PiPlay's, not every file in the root: the
+    # rollback deletes each non-data child before restoring, so a root holding files no payload
+    # manifest (root, staging, or backup) describes must still be refused - the final-review finding
+    # that the sibling evidence short-circuited the stranger check.
+    $rootK5 = Join-Path $sandbox "K5\PiPlay"
+    $pathsK5 = Get-DeploySwapPaths -DeployRoot $rootK5
+    New-Item -ItemType Directory -Path (Join-Path $rootK5 "runtimes") -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $rootK5 "runtimes\lib0.dll") -Value "lib0-NEW" -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $rootK5 "wedding-photo.jpg") -Value "precious" -Encoding UTF8
+    New-Payload -Dir $pathsK5.Backup -Token "OLD"
+
+    $errK5 = $null
+    try { Repair-InterruptedDeploy -DeployRoot $rootK5 -DataFolderName "PiPlayData" 3>$null | Out-Null }
+    catch { $errK5 = $_.Exception.Message }
+
+    Check "K5 a genuine backup does not vouch for strangers in the root" {
+        $null -ne $errK5 -and $errK5 -match 'not a PiPlay install'
+    }
+    Check "K6 the stranger survives the refusal"         { Test-Path -LiteralPath (Join-Path $rootK5 "wedding-photo.jpg") }
+    Check "K7 the backup is left intact"                 { (Get-ExeToken $pathsK5.Backup) -eq "exe-OLD" }
+
     # ------------------- L. the staging branch of repair deletes too, so it carries the same proof.
     # A foreign root with an unrelated '<leaf>.staging' sibling and no backup: the backup branch is
     # gone (case I covers it), but Remove-Item on the staging sibling is still somebody else's
