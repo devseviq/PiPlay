@@ -6,7 +6,7 @@
 .DESCRIPTION
   Thin wrapper over scripts\Build-PiPlay.ps1 that:
     0. takes a publish lock (per repo + per deploy root) so two publishes cannot interleave, and - for
-       an exact-source release - PREFLIGHTS the stable tag it is about to create. A tag collision is a
+       an exact-source release - PREFLIGHTS the stable tag it will use. A tag collision is a
        one-second failure now instead of a failure after the deployed copy has already been replaced;
     1. runs the deterministic local CI gate (scripts\Test-LocalCI.ps1 - the exact lane CI runs) as a
        gate, unless -SkipTests marks the publish diagnostic;
@@ -27,7 +27,8 @@
     5. for a release publish, runs a PRE-TAG verification of the DEPLOYED copy
        (scripts\Verify-StableDeploy.ps1, post-copy artifact re-hash + repo cross-check), creates the
        stable-vX.Y.Z-bN tag ONLY after that passes, then runs a final full verification that requires
-       the tag - so a verification failure never leaves a release-looking tag behind. Diagnostic
+       the tag - so a failed first publish removes its new tag while a failed republish preserves
+       the existing tag. Diagnostic
        publishes skip the tag and verify once in diagnostics-only mode. Prints a summary.
 
   The deployed copy at the deploy root is the ONLY sanctioned target for manual/human testing
@@ -186,12 +187,13 @@ function Assert-StableTag {
             throw "Stable tag '$TagName' already exists at $existingCommit, expected $Commit."
         }
         Write-Host "  Stable tag already exists at the deploy commit: $TagName" -ForegroundColor Green
-        return
+        return $false
     }
 
     & git -C $repoRoot tag $TagName $Commit
     if ($LASTEXITCODE -ne 0) { throw "Failed to create stable tag '$TagName' at $Commit." }
     Write-Host "  Created stable tag: $TagName -> $Commit" -ForegroundColor Green
+    return $true
 }
 
 Write-Host "--- PiPlay stable publish ---" -ForegroundColor Cyan
@@ -241,7 +243,7 @@ try {
 # 0. Tag preflight. The stable tag used to be checked only AFTER the test lane, the build, and the
 # destructive deploy - so a colliding tag replaced Stable and only then failed at the very last step.
 # An exact-source publish knows the tag it will create up front (the stamps are already committed), so
-# check it now, while nothing has been touched. Only a run that will actually create the tag is
+# check it now, while nothing has been touched. Only a release run that will use the tag is
 # preflighted: any diagnostic escape hatch (-AllowDirty, -AllowVersionBump, or -SkipTests) takes the
 # no-tag path, so it must not be blocked by, or announce, a tag it will never create.
 if (-not $AllowDirty -and -not $AllowVersionBump -and -not $SkipTests) {
@@ -434,14 +436,16 @@ if ($AllowDirty -or $AllowVersionBump -or $SkipTests) {
 
     # The deployed bytes match the clean repo at HEAD - now it is safe to mint the release tag.
     Write-Step 6 "Creating exact-source stable tag '$stableTag' (pre-tag verification passed)..."
-    Assert-StableTag -TagName $stableTag -Commit ([string]$buildInfo.sourceCommit)
+    $tagCreated = Assert-StableTag -TagName $stableTag -Commit ([string]$buildInfo.sourceCommit)
 
     # Final gate: full release verification with NO escape hatch; the tag must now be present.
     Write-Step 7 "Final verification (full release checks, stable tag required)..."
     & $verifyScript -DeployRoot $DeployRoot
     if ($LASTEXITCODE -ne 0) {
-        # Readiness A-2: the tag was minted two lines ago and nothing release-looking may outlive a
-        # failed verification; delete it so the next publish is not blocked by a phantom release.
+        if (-not $tagCreated) {
+            throw "Deployed copy failed final verification; pre-existing stable tag '$stableTag' was preserved. Do NOT test from it."
+        }
+        # Only a tag minted by this invocation may be removed after failed final verification.
         $tagRemoved = Invoke-Git @("tag", "-d", $stableTag)
         if ([string]::IsNullOrEmpty($tagRemoved)) {
             throw "Deployed copy failed final verification and the just-created stable tag '$stableTag' could NOT be deleted - remove it manually (git tag -d $stableTag) before the next publish; do NOT test from it."

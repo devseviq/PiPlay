@@ -403,6 +403,20 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public async Task Failed_final_verification_preserves_existing_tag_and_removes_new_tag()
+    {
+        // The real release branch runs against a disposable Git repository. An idempotent
+        // republish must retain its old tag; a failed first publish must remove its new tag.
+        var harness = "tests/PiPlay.Tests/Infrastructure/StableTagOwnershipHarness.ps1";
+        var publish = Path.Combine(RepoRoot, "scripts", "Publish-Stable.ps1");
+        var (exitCode, output, error) = await RunPwshScriptAsync(harness, new[] { publish });
+
+        Assert.True(exitCode == 0, $"Stable tag ownership fixture failed.\n{output}\n{error}");
+        Assert.Contains("PASS pre-existing: tag present after failed final verification=True", output);
+        Assert.Contains("PASS new: tag present after failed final verification=False", output);
+    }
+
+    [Fact]
     public void Publish_preflights_the_stable_tag_before_anything_destructive()
     {
         var publish = Script("scripts/Publish-Stable.ps1");
