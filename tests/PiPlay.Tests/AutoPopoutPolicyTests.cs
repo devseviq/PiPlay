@@ -50,4 +50,24 @@ public class AutoPopoutPolicyTests
         Assert.Equal(expected, AutoPopoutPolicy.NeedsPlayerState(
             autoEnabled, isWatchVideo, currentVideoId, lastHandledVideoId, popoutActive));
     }
+
+    [Fact]
+    public void Leaving_the_watch_page_resets_the_dedup_key()
+    {
+        // Readiness A-5: the latch stopped a popped video from instantly re-popping, but it also
+        // swallowed the pop after the user left the watch page and came back to the same video.
+        Assert.True(AutoPopoutPolicy.ShouldResetDedupOnSourceDeparture(
+            isWatchVideo: false, transitionActive: false, lastHandledVideoId: "dQw4w9WgXcQ"));
+    }
+
+    [Theory]
+    [InlineData(true, false, "dQw4w9WgXcQ")]   // still the watch page
+    [InlineData(false, true, "dQw4w9WgXcQ")]   // popout/return active: the Source is the placeholder
+    [InlineData(false, false, null)]           // nothing latched
+    public void The_dedup_key_survives_watch_pages_transitions_and_empty_latches(
+        bool isWatchVideo, bool transitionActive, string? lastHandledVideoId)
+    {
+        Assert.False(AutoPopoutPolicy.ShouldResetDedupOnSourceDeparture(
+            isWatchVideo, transitionActive, lastHandledVideoId));
+    }
 }

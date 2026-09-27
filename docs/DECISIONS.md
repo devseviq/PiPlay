@@ -28,7 +28,7 @@ Fade and opacity are visual only. Do not set `WS_EX_TRANSPARENT`, pass through m
 
 ## ADR-0007 — Stable channel and portable data (accepted)
 
-`PiPlayChannel` is baked into assembly metadata; `PIPLAY_CHANNEL` is a test/diagnostic override. `PIPLAY_DATA_ROOT` overrides data location. Otherwise Stable uses `<exeDir>\PiPlayData`, Default uses `%LOCALAPPDATA%\PiPlay`. Each channel has its own per-session mutex; Default and Stable may run side by side. Stable deployment uses `PIPLAY_STABLE_ROOT`, `Publish-Stable.ps1`, and `Verify-StableDeploy.ps1`; `PiPlayData` stays in place during staged replacement. (`AppChannel`, `AppPaths`, `DeploySwap.ps1`.)
+`PiPlayChannel` is baked into assembly metadata; `PIPLAY_CHANNEL` is a test/diagnostic override. `PIPLAY_DATA_ROOT` overrides data location. Otherwise Stable uses `<exeDir>\PiPlayData`, Default uses `%LOCALAPPDATA%\PiPlay`. Each channel has its own per-session mutex; Default and Stable may run side by side. Stable deployment uses `PIPLAY_STABLE_ROOT`, `Publish-Stable.ps1`, and `Verify-StableDeploy.ps1`; `PiPlayData` is the only part of the deploy root that stays in place during staged replacement, so the root is dedicated to the deployed copy and everything else in it is displaced into a backup that a verified deploy deletes. (`AppChannel`, `AppPaths`, `DeploySwap.ps1`.)
 
 ## ADR-0008 — Rounded Popout region (accepted)
 

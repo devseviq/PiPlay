@@ -118,6 +118,39 @@ public static class YouTubeDomBridge
     // (for example, a healthy 4 Hz player-state read beside a failing 1 Hz Source suppression).
     // Weak keys keep closed/disposed WebViews collectible.
     private static readonly ConditionalWeakTable<CoreWebView2, DomFailureState> FailureStates = new();
+    private static readonly object FailureStateSync = new();
+
+    /// <summary>
+    /// Raised with the operation name when its consecutive failures on one surface cross the
+    /// degraded threshold, and with null only when every degraded operation has recovered
+    /// (readiness A-1: the gate used to coalesce log lines only, so persistent failure was
+    /// invisible in the UI).
+    /// </summary>
+    public static event Action<string?>? DegradedStateChanged;
+
+    // Degraded keys are (surface, operation): the Source and a popout run the same operation names
+    // on different WebViews, so a healthy popout read must not clear the Source's hint. Recovery
+    // removes its key; a surface that is torn down never recovers, so its owner calls ForgetSurface.
+    private static readonly DomBridgeDegradedTracker DegradedTracker = new();
+
+    /// <summary>
+    /// Forget a WebView that is being torn down (a closed popout, a replaced or disposed Source
+    /// browser): its degraded keys are dropped so the hint can clear once every surface that is
+    /// still alive is healthy. Pass the core captured before the control is disposed.
+    /// </summary>
+    public static void ForgetSurface(CoreWebView2? webView)
+    {
+        if (webView is null) return;
+        bool cleared;
+        lock (FailureStateSync)
+        {
+            if (!FailureStates.TryGetValue(webView, out var failureState)) return;
+            FailureStates.Remove(webView);
+            cleared = DegradedTracker.ReleaseSurface(failureState.SurfaceId);
+        }
+        if (cleared)
+            DegradedStateChanged?.Invoke(null);
+    }
 
     /// <summary>Read current time / paused / duration, or null if no video or the read failed.</summary>
     public static async Task<PlayerState?> ReadPlayerStateAsync(CoreWebView2 webView)
@@ -1150,7 +1183,16 @@ public static class YouTubeDomBridge
         string script,
         string operation)
     {
-        var failureState = FailureStates.GetOrCreateValue(webView);
+        DomFailureState failureState;
+        lock (FailureStateSync)
+        {
+            if (!FailureStates.TryGetValue(webView, out failureState!))
+            {
+                failureState = new DomFailureState();
+                FailureStates.Add(webView, failureState);
+                DegradedTracker.RegisterSurface(failureState.SurfaceId);
+            }
+        }
         try
         {
             var value = await AsyncOperationDeadline.RunSingleFlightAsync(
@@ -1160,12 +1202,18 @@ public static class YouTubeDomBridge
             var suppressed = failureState.GateFor(operation).RecordSuccess();
             if (suppressed is int repeatCount)
                 Log.Info($"YouTube DOM {operation} recovered; {repeatCount} repeated failure(s) were suppressed.");
+            if (DegradedTracker.RecordRecovery(failureState.SurfaceId, operation))
+                DegradedStateChanged?.Invoke(null);
             return new DomExecutionResult(true, value);
         }
         catch (Exception ex)
         {
-            if (failureState.GateFor(operation).RecordFailure())
+            var failureCount = failureState.GateFor(operation).RecordFailureCount();
+            if (failureCount == 1)
                 Log.Error($"YouTube DOM {operation} failed; repeated failures are suppressed until recovery.", ex);
+            var degradedOperation = DegradedTracker.RecordFailure(failureState.SurfaceId, operation, failureCount);
+            if (degradedOperation is not null)
+                DegradedStateChanged?.Invoke(degradedOperation);
             return new DomExecutionResult(false, null);
         }
     }
@@ -1177,6 +1225,10 @@ public static class YouTubeDomBridge
 
     private sealed class DomFailureState
     {
+        // One stable id for the WebView this state belongs to; degraded keys embed it so the same
+        // operation on another surface (a popout) neither raises nor clears this surface's hint.
+        internal readonly Guid SurfaceId = Guid.NewGuid();
+
         private readonly object _sync = new();
         private readonly Dictionary<string, ConsecutiveFailureGate> _gates =
             new(StringComparer.Ordinal);

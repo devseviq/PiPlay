@@ -752,6 +752,27 @@ public class MainWindowRecoveryTests : IDisposable
         });
     }
 
+    // --- DOM-bridge degraded hint (readiness A-1) ---
+
+    [Fact]
+    public void Dom_bridge_degraded_hint_appears_and_clears_on_recovery()
+    {
+        StaTestThread.Invoke(() =>
+        {
+            // Readiness A-1: persistent DOM-bridge failure was log-only; the title-bar hint makes it
+            // visible once, mirroring the settings-unsaved hint.
+            var window = new MainWindow();
+            try
+            {
+                window.SimulateDomBridgeDegradedForTests("readPlayerState");
+                Assert.True(window.IsDomBridgeDegradedHintVisibleForTests);
+                window.SimulateDomBridgeDegradedForTests(null);
+                Assert.False(window.IsDomBridgeDegradedHintVisibleForTests);
+            }
+            finally { window.Close(); }
+        });
+    }
+
     public void Dispose() => StaTestThread.Invoke(() =>
     {
         foreach (var window in Application.Current.Windows.Cast<Window>().ToArray())

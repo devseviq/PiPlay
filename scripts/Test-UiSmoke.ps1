@@ -1,7 +1,7 @@
 #requires -Version 7
 <#
 .SYNOPSIS
-  Manual end-to-end UI smoke for PiPlay: launches the built exe, asserts key UI elements via
+  Manual end-to-end UI smoke for PiPlay: launches a published Stable exe, asserts key UI elements via
   UI Automation, and captures a screenshot for the final deployed smoke.
 .DESCRIPTION
   Final deployed-window smoke (spec 22.2). NOT part of `dotnet test` — it needs an
@@ -9,30 +9,139 @@
   and captures the rendered window from an isolated data root; real playback/audio acceptance
   remains an end-user check. The capture is per-monitor-DPI aware, foregrounds the actual PiPlay
   HWND, and rejects blank/uniform frames instead of reporting a false pass.
+
+  The PASS is bound to the copy it actually ran (readiness review F-7): the target must be a
+  fully-qualified path - with no -ExePath it resolves to $env:PIPLAY_STABLE_ROOT\PiPlay.exe, the
+  deployed Stable copy - and ONE resolved path is used for the marker directory, the manifest
+  cross-check and the launch, so the identity gate cannot vouch for one directory while a
+  different PiPlay.exe starts. The run refuses an exe whose identity is not proven: its
+  .piplay.publish.marker must declare channel=Stable with a semver-shaped version and a numeric
+  build number, and where build-info.json sits beside the exe its version, buildNumber,
+  publishLabel and sourceCommit must all agree with the marker. That rules out source and
+  bin\publish output, which CLAUDE.md forbids as evidence. A verified package payload gets the
+  same identity through -MarkerPath, which scripts\Test-DownloadedPackage.ps1 materialises outside
+  the package root from the manifest it has just hash-checked. The marker's releaseEvidence flag
+  is echoed into every message, so a test-prerelease smoke can never be read as release proof.
+  The screenshot is named with the marker's version, build number and source commit.
 .EXAMPLE
   pwsh -File scripts/Test-UiSmoke.ps1
+  # Smokes the deployed Stable copy at $env:PIPLAY_STABLE_ROOT\PiPlay.exe.
 .EXAMPLE
-  pwsh -File scripts/Test-UiSmoke.ps1 -ExePath bin\publish\latest\PiPlay.exe
+  pwsh -File scripts/Test-UiSmoke.ps1 -ExePath (Join-Path $env:PIPLAY_STABLE_ROOT 'PiPlay.exe')
 #>
 param(
-    [string]$ExePath = "$PSScriptRoot\..\bin\publish\latest\PiPlay.exe",
+    [string]$ExePath,
     [string]$EvidenceDir = "$PSScriptRoot\..\docs\evidence",
     [string]$DataRoot,
+    [string]$MarkerPath,
     [int]$ReadyTimeoutSec = 30
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $ExePath)) {
-    throw "PiPlay.exe not found at '$ExePath'. Build a publish first: .\Build-PiPlay.ps1 -Stage Publish"
+# Review F-7 follow-up: a relative path resolves differently for Test-Path (session location),
+# [IO.Path]::GetFullPath (process CWD) and Start-Process (session location), so the identity gate
+# could validate one directory while launching another PiPlay.exe. Require one fully qualified path
+# and resolve it exactly once (same rule as Publish-Stable's DeployRoot guard).
+function Resolve-SmokePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    # Forward slashes are fully qualified on Windows too ('D:/Stable', '//server/share/x'); normalize
+    # so the drive/UNC root checks accept them instead of rejecting a valid path with a confusing
+    # 'not fully qualified' error.
+    $Path = $Path -replace '/', '\'
+    $root = [System.IO.Path]::GetPathRoot($Path)
+    if (-not (($root -match '^[A-Za-z]:\\$') -or ($root -match '^\\\\[^\\]+\\[^\\]+$'))) {
+        throw "$Label must be a fully qualified absolute path with its own drive or UNC share (got '$Path')."
+    }
+    return [System.IO.Path]::GetFullPath($Path)
 }
-New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
+
+if ([string]::IsNullOrWhiteSpace($ExePath)) {
+    $stableRoot = [Environment]::GetEnvironmentVariable('PIPLAY_STABLE_ROOT')
+    if ([string]::IsNullOrWhiteSpace($stableRoot)) {
+        throw "No -ExePath and PIPLAY_STABLE_ROOT is unset; refusing to smoke an arbitrary build. " +
+              "Set PIPLAY_STABLE_ROOT to the deployed Stable directory (docs\RELEASING.md) or pass " +
+              "-ExePath to a published copy."
+    }
+    $ExePath = Resolve-SmokePath -Path (Join-Path $stableRoot 'PiPlay.exe') -Label 'PIPLAY_STABLE_ROOT'
+} else {
+    $ExePath = Resolve-SmokePath -Path $ExePath -Label '-ExePath'
+}
+if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+    throw "PiPlay.exe not found at '$ExePath'."
+}
+
+$exeDir = Split-Path -Parent $ExePath
+if ([string]::IsNullOrWhiteSpace($MarkerPath)) {
+    $MarkerPath = Join-Path $exeDir '.piplay.publish.marker'
+} else {
+    # Trusted-orchestrator override, used by Test-DownloadedPackage.ps1 so the identity marker
+    # stays OUTSIDE the extracted package (a file inside the root would fail the verifier's own
+    # inventory check on re-run). The value is still fully qualified and still must pass every
+    # identity assertion below - it changes where identity is read from, never whether it is proven.
+    $MarkerPath = Resolve-SmokePath -Path $MarkerPath -Label '-MarkerPath'
+}
+if (-not (Test-Path -LiteralPath $MarkerPath -PathType Leaf)) {
+    throw "No .piplay.publish marker at '$MarkerPath': this is not a published Stable copy. " +
+          "Deploy with Publish-Stable.ps1 or verify a downloaded package with Test-DownloadedPackage.ps1, " +
+          "and smoke THAT copy - source and bin output are never evidence (CLAUDE.md)."
+}
+$marker = @{}
+foreach ($line in @(Get-Content -LiteralPath $MarkerPath)) {
+    $kv = $line -split '=', 2
+    if ($kv.Count -eq 2 -and -not [string]::IsNullOrWhiteSpace($kv[0]) -and -not [string]::IsNullOrWhiteSpace($kv[1])) {
+        $marker[$kv[0].Trim()] = $kv[1].Trim()
+    }
+}
+if ($marker['channel'] -cne 'Stable') {
+    throw "Publish marker '$MarkerPath' declares channel '$($marker['channel'])', expected 'Stable'."
+}
+$identityVersion = [string]$marker['version']
+$identityBuild   = [string]$marker['buildNumber']
+$identityCommit  = [string]$marker['sourceCommit']
+# The identity lands in the screenshot filename, so validate its shape here rather than trusting
+# GDI+ to refuse a traversal like version='..\..\x' after the app is already running.
+if ($identityVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$' -or
+    $identityBuild -notmatch '^[0-9]+$') {
+    throw "Publish marker '$MarkerPath' carries malformed identity (version '$identityVersion', buildNumber '$identityBuild'); refusing to derive an evidence filename from it."
+}
+
+# A published copy also carries build-info.json beside the exe; where it does, ALL four stamps must
+# agree with the marker (mirroring Verify-StableDeploy.ps1), so evidence cannot be stamped with a
+# commit or publishLabel the on-disk manifest contradicts.
+$buildInfoPath = Join-Path $exeDir 'build-info.json'
+if (Test-Path -LiteralPath $buildInfoPath -PathType Leaf) {
+    $smokeBuildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+    foreach ($stamp in @(
+        @{ Name = 'version';      Marker = $identityVersion;                 Manifest = [string]$smokeBuildInfo.version },
+        @{ Name = 'buildNumber';  Marker = $identityBuild;                   Manifest = [string]$smokeBuildInfo.buildNumber },
+        @{ Name = 'publishLabel'; Marker = [string]$marker['publishLabel'];  Manifest = [string]$smokeBuildInfo.publishLabel },
+        @{ Name = 'sourceCommit'; Marker = $identityCommit;                  Manifest = [string]$smokeBuildInfo.sourceCommit })) {
+        if ($stamp.Marker -ne $stamp.Manifest) {
+            throw "Publish marker and build-info.json beside '$ExePath' disagree on $($stamp.Name): marker='$($stamp.Marker)' manifest='$($stamp.Manifest)'."
+        }
+    }
+}
+$releaseFlag = [string]$marker['releaseEvidence']
+if ($releaseFlag -cne 'True') {
+    Write-Warning "Marker releaseEvidence=$releaseFlag (publishLabel '$($marker['publishLabel'])'): a SMOKE PASS on this copy is package/diagnostic evidence, NOT Stable release proof."
+}
+$commitStamp = if ($identityCommit -match '^[0-9a-fA-F]{7,}$') {
+    $identityCommit.Substring(0, [Math]::Min(12, $identityCommit.Length)).ToLowerInvariant()
+} else { 'no-commit' }
+Write-Host "Smoke target: $ExePath" -ForegroundColor Cyan
+Write-Host "Identity    : v$identityVersion b$identityBuild @ $commitStamp releaseEvidence=$releaseFlag" -ForegroundColor Cyan
+New-Item -ItemType Directory -Force -LiteralPath $EvidenceDir | Out-Null
 
 $ownsDataRoot = [string]::IsNullOrWhiteSpace($DataRoot)
 if ($ownsDataRoot) {
     $DataRoot = Join-Path ([IO.Path]::GetTempPath()) ("PiPlayUiSmokeData-" + [Guid]::NewGuid().ToString("N"))
 }
-New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null
+New-Item -ItemType Directory -Force -LiteralPath $DataRoot | Out-Null
 
 Add-Type @'
 using System;
@@ -137,14 +246,16 @@ try {
             throw "Rendered capture is blank or uniform ($($colors.Count) sampled color(s)); refusing a false smoke pass."
         }
 
-        $shot = Join-Path $EvidenceDir ("ui-smoke-{0}.png" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        # Stamped with the identity under test so a filed screenshot can never be a stale dev build.
+        $shot = Join-Path $EvidenceDir ("ui-smoke-v{0}-b{1}-{2}-{3}.png" -f `
+            $identityVersion, $identityBuild, $commitStamp, (Get-Date -Format 'yyyyMMdd-HHmmss'))
         $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
     }
     finally {
         $bmp.Dispose()
     }
     Write-Host "Saved screenshot: $shot" -ForegroundColor Cyan
-    Write-Host "SMOKE PASS" -ForegroundColor Green
+    Write-Host "SMOKE PASS  v$identityVersion b$identityBuild @ $commitStamp" -ForegroundColor Green
 }
 finally {
     if ($null -ne $proc -and -not $proc.HasExited) {

@@ -28,14 +28,18 @@ public sealed record InboundShellMessage(
 /// (spec 10.3). The single source of truth both <see cref="PlayerShellBridge"/> (host) and
 /// <c>player-shell.js</c> (shell) follow. Minimal and local-only: the shell reports ready / state /
 /// error; the host commands play / pause / seek / requestState. No credentials, cookies, or tokens
-/// ever cross this channel. All parsing is best-effort (Q-3/Q-6): malformed input yields
-/// <see cref="ShellMessageKind.Unknown"/>, never an exception.
+/// ever cross this channel. Parse enforces the exact current <see cref="Version"/> and the exact
+/// per-type field set (readiness A-8, mirroring the Focused protocols): a wrong or missing version,
+/// an unknown or duplicate top-level field, or any other malformed input fails closed to
+/// <see cref="ShellMessageKind.Unknown"/>, never an exception (Q-3/Q-6).
 /// </summary>
 public static class PlayerShellProtocol
 {
     // v3: state messages additionally carry the current videoId (overhaul Task 3 — the shell can
     // move off its launch video via playlist auto-advance or in-iframe clicks, and the host needs
-    // the CURRENT video for return). Additive and parse-compatible; v2 senders simply yield null.
+    // the CURRENT video for return). Additive on the wire only: host and shell ship together, so
+    // Parse now requires exactly this version and rejects older senders outright (readiness A-8);
+    // known fields stay optional per type (defaults fill them) to keep field additions additive.
     public const int Version = 3;
 
     // Shell -> host message types.
@@ -105,6 +109,11 @@ public static class PlayerShellProtocol
             if (root.ValueKind != JsonValueKind.Object) return new InboundShellMessage(ShellMessageKind.Unknown);
             if (!root.TryGetProperty(KeyType, out var typeEl) || typeEl.ValueKind != JsonValueKind.String)
                 return new InboundShellMessage(ShellMessageKind.Unknown);
+            if (!root.TryGetProperty(KeyVersion, out var versionEl)
+                || versionEl.ValueKind != JsonValueKind.Number
+                || !versionEl.TryGetInt32(out var version) || version != Version)
+                return new InboundShellMessage(ShellMessageKind.Unknown);
+            if (!HasExactSchema(root, typeEl.GetString())) return new InboundShellMessage(ShellMessageKind.Unknown);
 
             return typeEl.GetString() switch
             {
@@ -149,6 +158,34 @@ public static class PlayerShellProtocol
         return action is ActionClose or ActionPinToggle or ActionFullscreenToggle
             ? new InboundShellMessage(ShellMessageKind.Request, Action: action)
             : new InboundShellMessage(ShellMessageKind.Unknown);
+    }
+
+    /// <summary>
+    /// Exact top-level schema per message type, mirroring the Focused protocols (readiness A-8):
+    /// membership rejects unknown fields, the seen-mask rejects duplicates (JSON duplicates yield
+    /// multiple properties), and known fields stay optional per type (defaults fill them),
+    /// preserving the additive-evolution contract.
+    /// </summary>
+    private static bool HasExactSchema(JsonElement root, string? type) => (type ?? "") switch
+    {
+        TypeReady => HasOnlyFields(root, KeyVersion, KeyType),
+        TypeState => HasOnlyFields(root, KeyVersion, KeyType, FieldCurrentTime, FieldPlayerState,
+            FieldDuration, FieldVideoId),
+        TypeError => HasOnlyFields(root, KeyVersion, KeyType, FieldCode),
+        TypeRequest => HasOnlyFields(root, KeyVersion, KeyType, FieldAction),
+        _ => false,
+    };
+
+    private static bool HasOnlyFields(JsonElement root, params string[] allowed)
+    {
+        int seen = 0;
+        foreach (var property in root.EnumerateObject())
+        {
+            var index = Array.IndexOf(allowed, property.Name);
+            if (index < 0 || (seen & (1 << index)) != 0) return false;
+            seen |= 1 << index;
+        }
+        return true;
     }
 
     private static int ReadInt(JsonElement root, string name, int fallback) =>

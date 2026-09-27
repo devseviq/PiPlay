@@ -109,4 +109,28 @@ public class KeyboardShortcutPolicyTests
         Assert.True(gate.TryBegin(PopoutShortcut.ToggleExpand, isRepeat: false));
         Assert.True(gate.TryBegin(PopoutShortcut.TogglePin, isRepeat: false));
     }
+
+    [Fact]
+    public void Repeat_gate_stays_latched_while_its_chord_is_physically_held()
+    {
+        var gate = new ShortcutRepeatGate<PopoutShortcut>();
+
+        Assert.True(gate.TryBegin(PopoutShortcut.TogglePin, isRepeat: false));
+        gate.ReleaseUnlessHeld(shortcut => shortcut == PopoutShortcut.TogglePin);
+        Assert.False(gate.TryBegin(PopoutShortcut.TogglePin, isRepeat: false));
+
+        gate.ReleaseUnlessHeld(_ => false);
+        Assert.True(gate.TryBegin(PopoutShortcut.TogglePin, isRepeat: false));
+    }
+
+    [Fact]
+    public void Held_toggle_checks_ignore_unrelated_keys_but_require_the_complete_chord()
+    {
+        var heldKeys = new[] { ShortcutKey.T, ShortcutKey.Other };
+
+        Assert.True(KeyboardShortcutPolicy.IsSourceToggleHeld(SourceShortcut.TogglePin, heldKeys, Ctrl));
+        Assert.True(KeyboardShortcutPolicy.IsPopoutToggleHeld(PopoutShortcut.TogglePin, heldKeys, Ctrl));
+        Assert.False(KeyboardShortcutPolicy.IsSourceToggleHeld(SourceShortcut.TogglePin, heldKeys, CtrlShift));
+        Assert.False(KeyboardShortcutPolicy.IsPopoutToggleHeld(PopoutShortcut.BringVideoBack, heldKeys, Ctrl));
+    }
 }

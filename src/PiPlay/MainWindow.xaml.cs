@@ -172,6 +172,7 @@ public partial class MainWindow : Window
 
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        YouTubeDomBridge.DegradedStateChanged += OnDomBridgeDegradedStateChanged;
         // A key-up can be lost while another window has focus; never keep a shortcut latched.
         Deactivated += (_, _) => _shortcutGate.Release();
         // Ctrl+Shift+P that brought the video back is usually still held when the Source
@@ -583,6 +584,9 @@ public partial class MainWindow : Window
             var core = old.CoreWebView2;
             if (core is not null)
             {
+                // First, before a dead core can refuse the detaches below: the hint must not
+                // outlive the surface it was raised for.
+                YouTubeDomBridge.ForgetSurface(core);
                 core.NavigationStarting -= Core_NavigationStarting;
                 core.NavigationCompleted -= Core_NavigationCompleted;
                 core.NewWindowRequested -= Core_NewWindowRequested;
@@ -1029,7 +1033,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) => _shortcutGate.Release();
+    private void MainWindow_PreviewKeyUp(object sender, KeyEventArgs e) =>
+        _shortcutGate.ReleaseUnlessHeld(shortcut => KeyboardShortcutPolicy.IsSourceToggleHeld(shortcut,
+            KeyboardShortcutInput.HeldKeys(), KeyboardShortcutInput.Translate(Keyboard.Modifiers)));
 
     internal void LatchHeldShortcut(SourceShortcut held)
     {
@@ -1239,12 +1245,21 @@ public partial class MainWindow : Window
             }
 
             var isWatchVideo = YouTubeUrlHelper.IsWatchUrl(src);
+            // Readiness A-5: leaving the watch page (SPA or document navigation) drops the dedup key,
+            // so re-opening the same video auto-pops again. Same active-transition guard as below so
+            // a placeholder Source never clears a latch a return still needs.
+            var transitionActive = _popoutInProgress || _returnInProgress || _player is not null;
+            if (AutoPopoutPolicy.ShouldResetDedupOnSourceDeparture(
+                    isWatchVideo, transitionActive, _autoLastHandledVideoId))
+            {
+                _autoLastHandledVideoId = null;
+            }
             if (!AutoPopoutPolicy.NeedsPlayerState(
                     autoEnabled: true,
                     isWatchVideo,
                     currentVideoId: target.VideoId,
                     lastHandledVideoId: _autoLastHandledVideoId,
-                    popoutActive: _popoutInProgress || _returnInProgress || _player is not null))
+                    popoutActive: transitionActive))
             {
                 return;
             }
@@ -2057,6 +2072,26 @@ public partial class MainWindow : Window
     internal void ReplaceSettingsServiceForTests(SettingsService service) => _settingsService = service;
     internal void SaveSettingsForTests() => SaveSettings();
 
+    /// <summary>
+    /// A persistent DOM-bridge failure is log-only no longer (readiness A-1): show the title-bar
+    /// hint once per episode, on the UI thread, and clear it when a degraded operation recovers.
+    /// </summary>
+    private void OnDomBridgeDegradedStateChanged(string? operation)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => OnDomBridgeDegradedStateChanged(operation));
+            return;
+        }
+        if (_mainWindowClosing) return;
+        DomBridgeDegradedHint.Visibility = operation is null ? Visibility.Collapsed : Visibility.Visible;
+        if (operation is not null)
+            Log.Warn($"YouTube DOM '{operation}' is failing persistently; the title-bar hint is shown.");
+    }
+
+    internal bool IsDomBridgeDegradedHintVisibleForTests => DomBridgeDegradedHint.Visibility == Visibility.Visible;
+    internal void SimulateDomBridgeDegradedForTests(string? operation) => OnDomBridgeDegradedStateChanged(operation);
+
     private void RefreshClearBrowserDataAvailability()
     {
         if (_settingsDialog is null) return;
@@ -2867,6 +2902,7 @@ public partial class MainWindow : Window
         try
         {
             _mainWindowClosing = true;
+            YouTubeDomBridge.DegradedStateChanged -= OnDomBridgeDegradedStateChanged;
             UpdatePopoutActionState();
             UpdateSourceCommandAvailability();
             _autoTimer?.Stop();

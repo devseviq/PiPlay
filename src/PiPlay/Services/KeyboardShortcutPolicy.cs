@@ -90,6 +90,12 @@ public static class KeyboardShortcutPolicy
         heldKeys.Select(key => ForPopout(key, modifiers))
             .FirstOrDefault(s => s is PopoutShortcut.ToggleExpand or PopoutShortcut.TogglePin or PopoutShortcut.BringVideoBack);
 
+    public static bool IsSourceToggleHeld(SourceShortcut shortcut, IEnumerable<ShortcutKey> heldKeys,
+        ShortcutModifiers modifiers) => heldKeys.Any(key => ForSource(key, modifiers) == shortcut);
+
+    public static bool IsPopoutToggleHeld(PopoutShortcut shortcut, IEnumerable<ShortcutKey> heldKeys,
+        ShortcutModifiers modifiers) => heldKeys.Any(key => ForPopout(key, modifiers) == shortcut);
+
     /// <summary>Appends a gesture hint to a tooltip, e.g. "Pin on top (Ctrl+T)".</summary>
     public static string WithGesture(string text, string gesture) => $"{text} ({gesture})";
 }
@@ -114,6 +120,11 @@ public sealed class ShortcutRepeatGate<TShortcut> where TShortcut : struct, Enum
             return false;
         _held = shortcut;
         return true;
+    }
+
+    public void ReleaseUnlessHeld(Func<TShortcut, bool> isHeld)
+    {
+        if (_held is { } held && !isHeld(held)) _held = null;
     }
 
     public void Release() => _held = null;

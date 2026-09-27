@@ -76,7 +76,7 @@ public class PlayerShellProtocolTests
     [Fact]
     public void Parses_ready()
     {
-        var msg = PlayerShellProtocol.Parse("{\"v\":1,\"type\":\"ready\"}");
+        var msg = PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"ready\"}");
         Assert.Equal(ShellMessageKind.Ready, msg.Kind);
     }
 
@@ -84,7 +84,7 @@ public class PlayerShellProtocolTests
     public void Parses_state_fields()
     {
         var msg = PlayerShellProtocol.Parse(
-            "{\"v\":1,\"type\":\"state\",\"currentTime\":42,\"playerState\":1,\"duration\":300}");
+            "{\"v\":3,\"type\":\"state\",\"currentTime\":42,\"playerState\":1,\"duration\":300}");
         Assert.Equal(ShellMessageKind.State, msg.Kind);
         Assert.Equal(42, msg.CurrentTime);
         Assert.Equal(1, msg.PlayerState);
@@ -94,12 +94,12 @@ public class PlayerShellProtocolTests
     [Fact]
     public void Parses_state_with_missing_fields_using_safe_defaults()
     {
-        var msg = PlayerShellProtocol.Parse("{\"v\":1,\"type\":\"state\"}");
+        var msg = PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"state\"}");
         Assert.Equal(ShellMessageKind.State, msg.Kind);
         Assert.Equal(0, msg.CurrentTime);
         Assert.Equal(-1, msg.PlayerState);   // YT "unstarted"
         Assert.Null(msg.Duration);           // live/unknown duration stays null
-        Assert.Null(msg.VideoId);            // pre-v3 senders never carry it (overhaul Task 3)
+        Assert.Null(msg.VideoId);            // omitted while the shell has no current video (defaults fill)
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class PlayerShellProtocolTests
     [Fact]
     public void Parses_error_code()
     {
-        var msg = PlayerShellProtocol.Parse("{\"v\":1,\"type\":\"error\",\"code\":\"150\"}");
+        var msg = PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"error\",\"code\":\"150\"}");
         Assert.Equal(ShellMessageKind.Error, msg.Kind);
         Assert.Equal("150", msg.ErrorCode);
     }
@@ -146,9 +146,9 @@ public class PlayerShellProtocolTests
     [InlineData("not json")]
     [InlineData("[1,2,3]")]                       // not an object
     [InlineData("\"a string\"")]                  // not an object
-    [InlineData("{\"v\":1}")]                     // no type
+    [InlineData("{\"v\":3}")]                     // no type
     [InlineData("{\"type\":42}")]                 // non-string type
-    [InlineData("{\"v\":1,\"type\":\"frobnicate\"}")] // unknown type
+    [InlineData("{\"v\":3,\"type\":\"frobnicate\"}")] // unknown type
     public void Malformed_or_unknown_messages_parse_to_unknown(string? json)
     {
         Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(json).Kind);
@@ -160,16 +160,48 @@ public class PlayerShellProtocolTests
         // The ValueKind guards must keep "never throws; malformed -> safe default": a wrong-typed
         // PRESENT field (string/bool/array where a number is expected) falls back, it does not crash.
         var state = PlayerShellProtocol.Parse(
-            "{\"v\":1,\"type\":\"state\",\"currentTime\":\"x\",\"playerState\":true,\"duration\":[1]}");
+            "{\"v\":3,\"type\":\"state\",\"currentTime\":\"x\",\"playerState\":true,\"duration\":[1]}");
         Assert.Equal(ShellMessageKind.State, state.Kind);
         Assert.Equal(0, state.CurrentTime);
         Assert.Equal(-1, state.PlayerState);
         Assert.Null(state.Duration);
 
         // A numeric error code is not a string, so it degrades to null (no exception).
-        var error = PlayerShellProtocol.Parse("{\"v\":1,\"type\":\"error\",\"code\":150}");
+        var error = PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"error\",\"code\":150}");
         Assert.Equal(ShellMessageKind.Error, error.Kind);
         Assert.Null(error.ErrorCode);
+    }
+
+    [Fact]
+    public void Parse_rejects_a_message_without_the_exact_version()
+    {
+        Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(
+            "{\"type\":\"state\",\"currentTime\":1,\"playerState\":1}").Kind);
+        Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(
+            "{\"v\":2,\"type\":\"state\",\"currentTime\":1,\"playerState\":1}").Kind);
+        Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(
+            "{\"v\":4,\"type\":\"state\",\"currentTime\":1,\"playerState\":1}").Kind);
+    }
+
+    [Theory]
+    [InlineData("{\"v\":3,\"type\":\"ready\",\"extra\":1}")]
+    [InlineData("{\"v\":3,\"type\":\"state\",\"currentTime\":1,\"playerState\":1,\"duration\":10,\"videoId\":\"dQw4w9WgXcQ\",\"extra\":true}")]
+    [InlineData("{\"v\":3,\"type\":\"error\",\"code\":\"x\",\"extra\":true}")]
+    [InlineData("{\"v\":3,\"type\":\"request\",\"action\":\"close\",\"extra\":true}")]
+    [InlineData("{\"v\":3,\"type\":\"state\",\"currentTime\":1,\"currentTime\":2,\"playerState\":1}")]
+    public void Parse_rejects_unknown_top_level_fields(string json)
+    {
+        Assert.Equal(ShellMessageKind.Unknown, PlayerShellProtocol.Parse(json).Kind);
+    }
+
+    [Fact]
+    public void Parse_still_accepts_the_exact_current_messages_with_optional_fields_omitted()
+    {
+        Assert.Equal(ShellMessageKind.Ready, PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"ready\"}").Kind);
+        Assert.Equal(ShellMessageKind.State, PlayerShellProtocol.Parse(
+            "{\"v\":3,\"type\":\"state\",\"currentTime\":1,\"playerState\":1}").Kind);
+        Assert.Equal(ShellMessageKind.Error, PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"error\",\"code\":\"runtime\"}").Kind);
+        Assert.Equal(ShellMessageKind.Request, PlayerShellProtocol.Parse("{\"v\":3,\"type\":\"request\",\"action\":\"close\"}").Kind);
     }
 
     // --- Request kind (Phase 4): allowlisted shell -> host window actions ---
@@ -180,17 +212,17 @@ public class PlayerShellProtocolTests
     [InlineData("fullscreenToggle")]
     public void Parses_allowlisted_request_actions(string action)
     {
-        var msg = PlayerShellProtocol.Parse($"{{\"v\":2,\"type\":\"request\",\"action\":\"{action}\"}}");
+        var msg = PlayerShellProtocol.Parse($"{{\"v\":3,\"type\":\"request\",\"action\":\"{action}\"}}");
         Assert.Equal(ShellMessageKind.Request, msg.Kind);
         Assert.Equal(action, msg.Action);
     }
 
     [Theory]
-    [InlineData("{\"v\":2,\"type\":\"request\"}")]                           // no action at all
-    [InlineData("{\"v\":2,\"type\":\"request\",\"action\":\"minimize\"}")]   // off-allowlist action
-    [InlineData("{\"v\":2,\"type\":\"request\",\"action\":\"Close\"}")]      // exact tokens only (case)
-    [InlineData("{\"v\":2,\"type\":\"request\",\"action\":42}")]             // wrong-typed action
-    [InlineData("{\"v\":2,\"type\":\"request\",\"action\":\"\"}")]           // empty action
+    [InlineData("{\"v\":3,\"type\":\"request\"}")]                           // no action at all
+    [InlineData("{\"v\":3,\"type\":\"request\",\"action\":\"minimize\"}")]   // off-allowlist action
+    [InlineData("{\"v\":3,\"type\":\"request\",\"action\":\"Close\"}")]      // exact tokens only (case)
+    [InlineData("{\"v\":3,\"type\":\"request\",\"action\":42}")]             // wrong-typed action
+    [InlineData("{\"v\":3,\"type\":\"request\",\"action\":\"\"}")]           // empty action
     public void Off_allowlist_requests_degrade_to_unknown(string json)
     {
         // The closed set is the security property (spec 12.5 / docs/YouTube_Compliance.md): an injected or future

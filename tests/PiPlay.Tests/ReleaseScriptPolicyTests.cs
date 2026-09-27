@@ -77,6 +77,208 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Ui_smoke_pass_is_bound_to_the_deployed_stable_identity()
+    {
+        var script = Script("scripts/Test-UiSmoke.ps1");
+        var verifier = Script("scripts/Test-DownloadedPackage.ps1");
+
+        // The old default targeted bin\publish\latest, so a stale dev build could yield a "SMOKE
+        // PASS" filed as deployed evidence (readiness review F-7). The no-argument form must bind
+        // to the deployed copy, and no invocation may skip the identity gate.
+        Assert.DoesNotContain(@"bin\publish\latest\PiPlay.exe", script);
+        // A parameter default is declared as "[string]$ExePath = ..." (never "-ExePath"), so the
+        // older dash-prefixed check was vacuous; this regex fires on the buggy shape only.
+        Assert.DoesNotMatch(@"\[string\]\$ExePath\s*=", script);
+        Assert.Contains("PIPLAY_STABLE_ROOT", script);
+        Assert.Contains("refusing to smoke an arbitrary build", script);
+        Assert.Contains("Test-Path -LiteralPath $ExePath", script);
+
+        // Relative paths resolve differently per API (session location vs process CWD), so the gate
+        // could vouch for one directory while launching another. One fully-qualified resolution.
+        Assert.Contains("fully qualified absolute path", script);
+
+        // The PASS must bind to a publish marker declaring channel=Stable, every manifest stamp
+        // must agree, and the screenshot must carry that identity in its name.
+        Assert.Contains(".piplay.publish", script);
+        Assert.Contains("$marker['channel'] -cne 'Stable'", script);
+        Assert.Contains("'publishLabel'", script);
+        Assert.Contains("'sourceCommit'", script);
+        Assert.Contains("disagree on", script);
+        Assert.Contains("ui-smoke-v{0}-b{1}-{2}-{3}.png", script);
+
+        // A downloaded package carries no deploy-time marker, so the package verifier - the only
+        // sanctioned way a package enters the smoke - materialises the identity it just
+        // hash-checked, OUTSIDE the package root (a file written inside would make the next run of
+        // the same extraction fail its exact-inventory check with a false tamper alarm), and passes
+        // it via -MarkerPath; it is removed on every exit path.
+        Assert.Contains("-MarkerPath $smokeMarkerPath", verifier);
+        Assert.Contains("PiPlaySmokeMarker-", verifier);
+        Assert.DoesNotContain("Join-Path $packageRoot '.piplay.publish.marker'", verifier);
+        Assert.Contains("finally", verifier);
+    }
+
+    [Theory]
+    [InlineData("missing-marker", "not a published Stable copy")]
+    [InlineData("wrong-channel", "expected 'Stable'")]
+    [InlineData("malformed-identity", "malformed identity")]
+    [InlineData("relative-exe", "fully qualified absolute path")]
+    [InlineData("disagreeing-manifest", "disagree on sourceCommit")]
+    [InlineData("external-marker-passes-gate", "LAUNCH-MARKER")]
+    public async Task Ui_smoke_identity_gate_refuses_unproven_targets(string shape, string expected)
+    {
+        // The string policy test above pins the TEXT; these cases run the real script so a weakened
+        // gate cannot keep the text and lose the behavior. Every case fails (or, for the positive
+        // control, proceeds) BEFORE the UI matters, so no desktop is needed.
+        var root = Path.Combine(Path.GetTempPath(), "PiPlayUiSmokeGate-" + Guid.NewGuid().ToString("N"));
+        var exeDir = Path.Combine(root, "copy");
+        Directory.CreateDirectory(exeDir);
+        try
+        {
+            var exePath = Path.Combine(exeDir, "PiPlay.exe");
+            await File.WriteAllTextAsync(exePath, "stub-not-a-real-exe");
+            const string goodMarker =
+                "PiPlay marker.\nchannel=Stable\nversion=0.14.0\nbuildNumber=40\n" +
+                "publishLabel=stable-v0.14.0-b40\nsourceCommit=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" +
+                "releaseEvidence=True\n";
+            switch (shape)
+            {
+                case "wrong-channel":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"),
+                        goodMarker.Replace("channel=Stable", "channel=Default"));
+                    break;
+                case "malformed-identity":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"),
+                        goodMarker.Replace("version=0.14.0", @"version=..\evil"));
+                    break;
+                case "disagreeing-manifest":
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, ".piplay.publish.marker"), goodMarker);
+                    await File.WriteAllTextAsync(Path.Combine(exeDir, "build-info.json"),
+                        """{"version":"0.14.0","buildNumber":"40","publishLabel":"stable-v0.14.0-b40","sourceCommit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}""");
+                    break;
+                case "external-marker-passes-gate":
+                    await File.WriteAllTextAsync(Path.Combine(root, "verifier-supplied.piplay.publish.marker"), goodMarker);
+                    break;
+            }
+
+            var arguments = new List<string>();
+            arguments.Add("-ExePath");
+            arguments.Add(shape == "relative-exe" ? "PiPlay.exe" : exePath);
+            arguments.Add("-EvidenceDir");
+            arguments.Add(Path.Combine(root, "evidence"));
+            arguments.Add("-DataRoot");
+            arguments.Add(Path.Combine(root, "data"));
+            arguments.Add("-ReadyTimeoutSec");
+            arguments.Add("2");
+            if (shape == "external-marker-passes-gate")
+            {
+                arguments.Add("-MarkerPath");
+                arguments.Add(Path.Combine(root, "verifier-supplied.piplay.publish.marker"));
+            }
+
+            var (exitCode, output, error) = await RunPwshScriptAsync("scripts/Test-UiSmoke.ps1", arguments);
+            // pwsh renders a throw as a box-drawing block that word-wraps mid-phrase and interleaves
+            // '|' gutters, so match on a compacted view that ignores whitespace and pipe columns
+            // rather than the exact line breaks the console happens to insert.
+            var combined = CompactForMatch(output + error);
+
+            if (expected == "LAUNCH-MARKER")
+            {
+                // Positive control: the gate cleared (identity echoed) and the stub died only at the
+                // process launch. Also: the exe directory gained no marker file from the run, and a
+                // non-release marker is loudly flagged rather than refused.
+                Assert.Contains(CompactForMatch("Identity : v0.14.0 b40"), combined);
+                Assert.False(File.Exists(Path.Combine(exeDir, ".piplay.publish.marker")));
+                Assert.DoesNotContain(CompactForMatch("not a published Stable copy"), combined);
+                Assert.DoesNotContain(CompactForMatch("expected 'Stable'"), combined);
+                return;
+            }
+            Assert.NotEqual(0, exitCode);
+            Assert.True(combined.Contains(CompactForMatch(expected), StringComparison.Ordinal),
+                $"COMBINED>>>{combined}<<<");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort fixture cleanup */ }
+        }
+    }
+
+    [Fact]
+    public async Task Ui_smoke_refuses_an_unset_stable_root_and_no_exe_path()
+    {
+        var startInfo = new ProcessStartInfo("pwsh")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = RepoRoot,
+        };
+        startInfo.Environment["NO_COLOR"] = "1";
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(RepoRoot, "scripts", "Test-UiSmoke.ps1"));
+        startInfo.Environment.Remove("PIPLAY_STABLE_ROOT");
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var exit = process.WaitForExitAsync();
+        if (await Task.WhenAny(exit, Task.Delay(TimeSpan.FromSeconds(30))) != exit)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Assert.Fail("UI-smoke unset-root fixture exceeded 30 seconds.");
+        }
+        await exit;
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains(CompactForMatch("refusing to smoke an arbitrary build"),
+            CompactForMatch(await output + await error));
+    }
+
+    private static string CompactForMatch(string value)
+    {
+        // pwsh colorizes error blocks with ANSI CSI sequences even when redirected; strip them,
+        // then the console box-drawing whitespace and '|' gutters, leaving the message bytes only.
+        var noAnsi = System.Text.RegularExpressions.Regex.Replace(
+            value ?? string.Empty, @"\x1B\[[0-9;?]*[ -/]*[@-~]", string.Empty);
+        return new(noAnsi.Where(c => !char.IsWhiteSpace(c) && c != '|').ToArray());
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunPwshScriptAsync(
+        string relativeScript, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo("pwsh")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = RepoRoot,
+        };
+        startInfo.Environment["NO_COLOR"] = "1";   // pwsh emits ANSI CSI in error blocks even when redirected
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(RepoRoot, relativeScript.Replace('/', Path.DirectorySeparatorChar)));
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        var exit = process.WaitForExitAsync();
+        if (await Task.WhenAny(exit, Task.Delay(TimeSpan.FromSeconds(30))) != exit)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Assert.Fail($"{relativeScript} exceeded the 30-second gate-fixture budget.");
+        }
+        await exit;
+        return (process.ExitCode, await output, await error);
+    }
+
+    [Fact]
     public void Verify_stable_fails_closed_on_missing_source_commit()
     {
         var script = Script("scripts/Verify-StableDeploy.ps1");
@@ -125,6 +327,48 @@ public class ReleaseScriptPolicyTests
     }
 
     [Fact]
+    public void Skip_tests_is_diagnostic_only_and_the_publish_gate_is_the_ci_gate()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+
+        // -SkipTests was the escape hatch that still minted a tag and printed "RELEASE VERIFIED".
+        // It must now (a) feed the non-release reasons, and (b) take the no-tag diagnostics path.
+        Assert.Contains("[switch]$SkipTests", publish);
+        Assert.Contains("if ($SkipTests)", publish);
+        Assert.Contains("$nonReleaseReasons += \"-SkipTests", publish);
+        Assert.Contains("$AllowDirty -or $AllowVersionBump -or $SkipTests", publish);
+
+        // A run that never tags must neither create the tag nor preflight it: step 0 (release-only
+        // collision check) and the summary's "Stable tag" line both exclude -SkipTests, so a
+        // diagnostic publish is never blocked by, or announces, a tag it will not make.
+        Assert.Equal(2, Regex.Matches(publish, @"-not \$AllowVersionBump -and -not \$SkipTests").Count);
+
+        // Step 1 must run the shared deterministic CI lane, not a bare `dotnet test`, so the publish
+        // gate and the CI gate cannot drift (readiness review F-6).
+        Assert.Contains("Test-LocalCI.ps1", publish);
+        Assert.DoesNotContain("& dotnet test", publish);
+        var localCi = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        var build = publish.IndexOf("Building + publishing the Stable channel Release", StringComparison.Ordinal);
+        Assert.True(localCi >= 0 && localCi < build, "The CI lane must gate the publish before the build.");
+    }
+
+    [Fact]
+    public void Fully_qualified_path_checks_accept_forward_slashes()
+    {
+        Assert.Contains("-replace '/', '\\'", Script("scripts/Publish-Stable.ps1"));
+        Assert.Contains("-replace '/', '\\'", Script("scripts/Test-UiSmoke.ps1"));
+    }
+
+    [Fact]
+    public void Publish_preflights_pwsh_before_the_test_lane()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+        var preflight = publish.IndexOf("Get-Command pwsh -ErrorAction SilentlyContinue", StringComparison.Ordinal);
+        var lane = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        Assert.True(preflight >= 0 && preflight < lane, "The pwsh preflight must precede the test lane.");
+    }
+
+    [Fact]
     public void Publish_creates_stable_tag_only_after_pretag_verification()
     {
         var publish = Script("scripts/Publish-Stable.ps1");
@@ -143,6 +387,33 @@ public class ReleaseScriptPolicyTests
         Assert.True(createTag >= 0, "Publish should create the stable tag via Assert-StableTag.");
         Assert.True(preTagVerify < createTag, "Pre-tag verification must run before the stable tag is created.");
         Assert.True(createTag < finalVerify, "A full verification must run after the tag is created.");
+    }
+
+    [Fact]
+    public void Publish_deletes_the_just_created_tag_when_final_verification_fails()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+
+        // Readiness A-2: step 6 minted the tag; a step 7 failure must not leave a release-looking
+        // tag behind (the next publish's preflight would treat it as a phantom release).
+        var tagDelete = publish.IndexOf("tag\", \"-d\"", StringComparison.Ordinal);
+        var finalVerify = publish.IndexOf("Final verification (full release checks", StringComparison.Ordinal);
+        Assert.True(tagDelete > finalVerify, "The tag deletion must sit inside the step 7 failure branch.");
+        Assert.Contains("the just-created stable tag", publish);
+    }
+
+    [Fact]
+    public async Task Failed_final_verification_preserves_existing_tag_and_removes_new_tag()
+    {
+        // The real release branch runs against a disposable Git repository. An idempotent
+        // republish must retain its old tag; a failed first publish must remove its new tag.
+        var harness = "tests/PiPlay.Tests/Infrastructure/StableTagOwnershipHarness.ps1";
+        var publish = Path.Combine(RepoRoot, "scripts", "Publish-Stable.ps1");
+        var (exitCode, output, error) = await RunPwshScriptAsync(harness, new[] { publish });
+
+        Assert.True(exitCode == 0, $"Stable tag ownership fixture failed.\n{output}\n{error}");
+        Assert.Contains("PASS pre-existing: tag present after failed final verification=True", output);
+        Assert.Contains("PASS new: tag present after failed final verification=False", output);
     }
 
     [Fact]
@@ -259,6 +530,60 @@ public class ReleaseScriptPolicyTests
         Assert.True(swapFn >= 0, "Invoke-StagedDeploy should exist.");
         Assert.True(swap.IndexOf(guard, swapFn, StringComparison.Ordinal) >= 0,
             "The swap loop must skip the runtime data folder (ADR-0007).");
+    }
+
+    [Fact]
+    public void Deploy_refuses_a_root_that_is_not_a_dedicated_piplay_install()
+    {
+        var publish = Script("scripts/Publish-Stable.ps1");
+        var swap = Script("scripts/DeploySwap.ps1");
+
+        // The staged swap consumes the WHOLE deploy root and deletes the backup holding what it
+        // displaced, so "absolute path" is not a safety property (readiness review F-1). Every
+        // destructive entry point must first prove the root is a PiPlay location.
+        Assert.Contains("function Assert-DeployRootIsDedicated", swap);
+
+        var staged = swap.IndexOf("function Invoke-StagedDeploy", StringComparison.Ordinal);
+        // Anchor on the CALL form ("... -DeployRoot"), not the bare name: prose and comments also
+        // mention the function, and a bare IndexOf would let a doc-comment stand in for a deleted guard.
+        var stagedAssert = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", staged, StringComparison.Ordinal);
+        var rootCreate = swap.IndexOf("New-Item -ItemType Directory -Path $DeployRoot -Force", staged, StringComparison.Ordinal);
+        Assert.True(staged >= 0 && stagedAssert >= 0 && rootCreate >= 0, "Invoke-StagedDeploy must gate the root.");
+        Assert.True(stagedAssert < rootCreate, "The root must be proven before anything is created or moved in it.");
+
+        // Both recovery branches delete too: the roll-back branch clears the root's children and the
+        // staging branch removes the sibling, so each carries the same proof. Bound the search to the
+        // repair function so Invoke-StagedDeploy's own gate cannot stand in for a deleted one.
+        var repair = swap.IndexOf("function Repair-InterruptedDeploy", StringComparison.Ordinal);
+        var repairEnd = swap.IndexOf("function Test-StagedPayload", repair, StringComparison.Ordinal);
+        var repairAsserts = new List<int>();
+        for (var at = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", repair, StringComparison.Ordinal);
+             at >= 0 && at < repairEnd; at = swap.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", at + 1, StringComparison.Ordinal))
+            repairAsserts.Add(at);
+        Assert.True(repairAsserts.Count >= 2, "Both destructive branches of the repair path must gate the root.");
+        var stagingDelete = swap.IndexOf("Remove-Item -LiteralPath $paths.Staging -Recurse -Force", repair, StringComparison.Ordinal);
+        Assert.True(stagingDelete > repairAsserts[^1], "The staging removal must sit behind its own gate.");
+
+        // What counts as "the payload's own names" comes from the deployed manifest, but Build-PiPlay
+        // deliberately keeps its own metadata out of artifactHashes. Those names must be listed as owned
+        // too, or every genuine redeploy warns about the install's own metadata and the warning that
+        // matters gets ignored with it (scripts\Test-DeploySwap.ps1 cases M4-M6).
+        var excluded = Regex.Match(Script("scripts/Build-PiPlay.ps1"), @"\$excludedNames = @\(([^)]*)\)");
+        Assert.True(excluded.Success, "Build-PiPlay's manifest-exclusion list must be parseable.");
+        var ownedList = Regex.Match(swap, @"\$owned = @\(([^)]*)\)");
+        Assert.True(ownedList.Success, "DeploySwap's payload-owned name list must be parseable.");
+        foreach (var literal in excluded.Groups[1].Value.Split(','))
+            Assert.Contains(literal.Trim().Trim('"'), ownedList.Groups[1].Value);
+
+        // Publish-Stable refuses a wrong root up front - before the locks, the test lane and the
+        // build - so a mistyped PIPLAY_STABLE_ROOT cannot even start an expensive run.
+        Assert.Contains("Test-PathFullyQualified", publish);
+        Assert.Contains("is, contains, or sits inside the repository root", publish);
+        var guard = publish.IndexOf("Assert-DeployRootIsDedicated -DeployRoot", StringComparison.Ordinal);
+        var lockTaken = publish.IndexOf("New-PublishLock", StringComparison.Ordinal);
+        var testGate = publish.IndexOf("Running deterministic test lane (gate)", StringComparison.Ordinal);
+        Assert.True(guard >= 0 && lockTaken >= 0 && guard < lockTaken, "The deploy-root guard must run before the publish locks.");
+        Assert.True(guard < testGate, "The deploy-root guard must run before the test lane.");
     }
 
     [Fact]

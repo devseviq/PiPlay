@@ -6,9 +6,10 @@
 .DESCRIPTION
   Thin wrapper over scripts\Build-PiPlay.ps1 that:
     0. takes a publish lock (per repo + per deploy root) so two publishes cannot interleave, and - for
-       an exact-source release - PREFLIGHTS the stable tag it is about to create. A tag collision is a
+       an exact-source release - PREFLIGHTS the stable tag it will use. A tag collision is a
        one-second failure now instead of a failure after the deployed copy has already been replaced;
-    1. (optionally) runs the deterministic test lane as a gate;
+    1. runs the deterministic local CI gate (scripts\Test-LocalCI.ps1 - the exact lane CI runs) as a
+       gate, unless -SkipTests marks the publish diagnostic;
     2. builds + publishes a Release with the Stable channel baked in - giving the deployed copy its
        own data root (PiPlayData beside the exe), its own single-instance identity, and a
        "PiPlay - Stable vX.Y.Z (bN)" title so it is differentiable from the dev app;
@@ -19,11 +20,15 @@
        payload moved in. A corrupt copy dies before the live copy is touched; a failure mid-swap rolls
        the previous copy back; an interrupted run is completed or reversed on the next publish. The
        PiPlayData runtime folder is never moved, so login/session survive. The .piplay.publish.marker
-       ships inside the payload, so it can never disagree with the bytes it describes;
+       ships inside the payload, so it can never disagree with the bytes it describes. The deploy root
+       itself must be DEDICATED to the deployed copy - missing, empty, PiPlayData-only, or an existing
+       PiPlay install - because everything else in it is displaced and then deleted; a root that is not
+       is refused up front, before the test lane or the build;
     5. for a release publish, runs a PRE-TAG verification of the DEPLOYED copy
        (scripts\Verify-StableDeploy.ps1, post-copy artifact re-hash + repo cross-check), creates the
        stable-vX.Y.Z-bN tag ONLY after that passes, then runs a final full verification that requires
-       the tag - so a verification failure never leaves a release-looking tag behind. Diagnostic
+       the tag - so a failed first publish removes its new tag while a failed republish preserves
+       the existing tag. Diagnostic
        publishes skip the tag and verify once in diagnostics-only mode. Prints a summary.
 
   The deployed copy at the deploy root is the ONLY sanctioned target for manual/human testing
@@ -34,8 +39,9 @@
 
   For a non-release local test build that intentionally stamps VERSION/BUILD_NUMBER during the
   publish, pass -AllowVersionBump with -Version/-BuildNumber/-NoVersionBump as needed. For a
-  dirty-tree diagnostic deploy, pass -AllowDirty. Both escape hatches are marked as NOT release
-  evidence in the manifest and verifier output.
+  dirty-tree diagnostic deploy, pass -AllowDirty. To deploy without re-running the CI lane, pass
+  -SkipTests. All three escape hatches are marked as NOT release evidence in the manifest and
+  verifier output, and none of them creates a stable tag.
 
   Optional -SignScript is forwarded to Build-PiPlay.ps1 and runs before final hashes are written,
   so signed bytes can pass manifest verification without post-sign hash drift.
@@ -79,13 +85,39 @@ if ([string]::IsNullOrWhiteSpace($DeployRoot)) {
 . (Join-Path $PSScriptRoot "DeploySwap.ps1")
 . (Join-Path $PSScriptRoot "PublishLock.ps1")
 
+function Test-PathFullyQualified {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # The Windows PowerShell 5.1 equivalent of [System.IO.Path]::IsPathFullyQualified, which does not
+    # exist on the framework this script still has to run on (#Requires -Version 5.1). A path is fully
+    # qualified only when it carries its own drive letter or UNC server+share.
+    # Forward slashes are fully qualified on Windows too ('D:/Stable', '//server/share/x'); normalize
+    # so the drive/UNC root checks accept them instead of rejecting a valid path with a confusing
+    # 'not fully qualified' error.
+    $Path = $Path -replace '/', '\'
+    $root = [System.IO.Path]::GetPathRoot($Path)
+    return ($root -match '^[A-Za-z]:\\$') -or ($root -match '^\\\\[^\\]+\\[^\\]+$')
+}
+
 if (-not [System.IO.Path]::IsPathRooted($DeployRoot)) {
     # A bare token like '--help' binds positionally to -DeployRoot and would deploy a full
     # publish tree into a junk folder next to this script. Use Get-Help for usage.
     throw "DeployRoot must be an absolute path (got '$DeployRoot'). For usage, run: Get-Help $PSCommandPath"
 }
+if (-not (Test-PathFullyQualified -Path $DeployRoot)) {
+    # IsPathRooted additionally admits the drive-relative forms \foo and D:foo, which resolve against
+    # the CURRENT drive's working directory: the deploy would land somewhere other than what was typed.
+    throw "DeployRoot must be a fully qualified absolute path with its own drive or UNC share (got '$DeployRoot')."
+}
+$DeployRoot = [System.IO.Path]::GetFullPath($DeployRoot)
+if ($DeployRoot.Length -gt 3 -and $DeployRoot.EndsWith("\")) {
+    # 'D:\Stable\' and 'D:\Stable' are the same directory; normalize so the sibling names the swap
+    # derives from the leaf, the deploy-root lock key, and the messages below all agree.
+    $DeployRoot = $DeployRoot.TrimEnd('\')
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRootPrefix = $repoRoot.TrimEnd('\') + '\'      # used by the deploy-root guard and the build-tree stop below
 $buildScript = Join-Path $PSScriptRoot "Build-PiPlay.ps1"
 $metadataScript = Join-Path $PSScriptRoot "Test-PublishMetadata.ps1"
 $publishRoot = Join-Path $repoRoot "bin\publish"
@@ -93,6 +125,39 @@ $latestDir = Join-Path $publishRoot "latest"
 $projectName = "PiPlay"
 $dataFolderName = "PiPlayData"          # must match AppPaths' portable data folder (AppContext.BaseDirectory\PiPlayData)
 $markerName = ".piplay.publish.marker"
+
+# Deploy root: the one input this script cannot undo. The staged swap consumes the WHOLE root - every
+# child except $dataFolderName is moved into a sibling backup that a successful deploy deletes - so an
+# absolute path is not a safety property. It is checked here, ahead of the test lane and the build, so a
+# wrong root is refused before anything expensive runs rather than minutes later at step 4.
+if (-not $SkipDeploy) {
+    $deployPathRoot = [System.IO.Path]::GetPathRoot($DeployRoot)
+    if ($DeployRoot.TrimEnd('\') -ieq $deployPathRoot.TrimEnd('\')) {
+        # A root with no parent has nowhere to keep its .staging/.backup siblings (Get-DeploySwapPaths
+        # refuses it too); never scatter deploy debris across a whole drive or share.
+        throw "DeployRoot must be a directory INSIDE a parent directory (got the root of '$deployPathRoot')."
+    }
+
+    if ($DeployRoot -ieq $repoRoot.TrimEnd('\') -or
+        $DeployRoot.StartsWith($repoRootPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $repoRootPrefix.StartsWith($DeployRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        # The swap deletes what it displaced once the deploy verifies: a root that overlaps the
+        # repository would take .git and the source tree with it.
+        throw "DeployRoot '$DeployRoot' is, contains, or sits inside the repository root '$repoRoot'. Point PIPLAY_STABLE_ROOT at a dedicated Stable directory outside the repository."
+    }
+
+    # Missing / empty / PiPlayData-only / an existing payload: anything else is somebody else's content.
+    # A half-finished earlier swap is legitimate, so the sibling locations are passed as evidence.
+    $deploySwapPaths = Get-DeploySwapPaths -DeployRoot $DeployRoot
+    Assert-DeployRootIsDedicated -DeployRoot $DeployRoot -DataFolderName $dataFolderName -ExeName "$projectName.exe" `
+        -MarkerName $markerName -SwapSiblingDirs @($deploySwapPaths.Staging, $deploySwapPaths.Backup)
+}
+
+# The test lane runs under PowerShell 7; a machine without it used to fail minutes in with a bare
+# CommandNotFoundException. Refuse up front, before the locks, with the actionable message instead.
+if (-not $SkipTests -and -not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+    throw "PowerShell 7 (pwsh) is required for the test lane. Install PowerShell 7 (winget install Microsoft.PowerShell) or pass -SkipTests for a diagnostics-only, non-evidence deploy."
+}
 
 function Write-Step([int]$n, [string]$message) { Write-Host "`n[$n] $message" -ForegroundColor Yellow }
 
@@ -122,12 +187,13 @@ function Assert-StableTag {
             throw "Stable tag '$TagName' already exists at $existingCommit, expected $Commit."
         }
         Write-Host "  Stable tag already exists at the deploy commit: $TagName" -ForegroundColor Green
-        return
+        return $false
     }
 
     & git -C $repoRoot tag $TagName $Commit
     if ($LASTEXITCODE -ne 0) { throw "Failed to create stable tag '$TagName' at $Commit." }
     Write-Host "  Created stable tag: $TagName -> $Commit" -ForegroundColor Green
+    return $true
 }
 
 Write-Host "--- PiPlay stable publish ---" -ForegroundColor Cyan
@@ -177,8 +243,10 @@ try {
 # 0. Tag preflight. The stable tag used to be checked only AFTER the test lane, the build, and the
 # destructive deploy - so a colliding tag replaced Stable and only then failed at the very last step.
 # An exact-source publish knows the tag it will create up front (the stamps are already committed), so
-# check it now, while nothing has been touched.
-if (-not $AllowDirty -and -not $AllowVersionBump) {
+# check it now, while nothing has been touched. Only a release run that will use the tag is
+# preflighted: any diagnostic escape hatch (-AllowDirty, -AllowVersionBump, or -SkipTests) takes the
+# no-tag path, so it must not be blocked by, or announce, a tag it will never create.
+if (-not $AllowDirty -and -not $AllowVersionBump -and -not $SkipTests) {
     Write-Step 0 "Tag preflight (before tests, build, or deploy)..."
     $repoVersion = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -Raw).Trim()
     $repoBuildNumber = (Get-Content -LiteralPath (Join-Path $repoRoot "BUILD_NUMBER") -Raw).Trim()
@@ -202,23 +270,16 @@ creation. Choose the version move, edit VERSION/BUILD_NUMBER, commit the stamps,
     }
 }
 
-# 1. Test gate (mirror CI's deterministic lane).
+# 1. Test gate. Run the SAME deterministic lane CI runs (readiness review F-6): a bare
+# `dotnet test` here left the Node version check and the Release-channel build stage out of
+# the publish gate, so a commit could pass publish and fail CI. Skipping the lane is now a
+# diagnostic escape hatch in its own right - see the non-release reasons below.
 if ($SkipTests) {
-    Write-Step 1 "Test gate skipped (-SkipTests)."
+    Write-Step 1 "Test gate skipped (-SkipTests); this publish is NOT release evidence."
 } else {
-    Write-Step 1 "Running deterministic test lane (gate)..."
-    $prevDataRoot = $env:PIPLAY_DATA_ROOT
-    $testDataRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("PiPlayStablePublishTests-" + [guid]::NewGuid().ToString("N"))
-    $env:PIPLAY_DATA_ROOT = $testDataRoot
-    try {
-        & dotnet test (Join-Path $repoRoot "PiPlay.sln") --configuration Debug
-        if ($LASTEXITCODE -ne 0) { throw "Test lane failed; aborting stable publish." }
-    } finally {
-        $env:PIPLAY_DATA_ROOT = $prevDataRoot
-        if (Test-Path -LiteralPath $testDataRoot) {
-            Remove-Item -LiteralPath $testDataRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-Step 1 "Running deterministic test lane (gate): scripts\Test-LocalCI.ps1..."
+    & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File (Join-Path $PSScriptRoot "Test-LocalCI.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Test lane failed; aborting stable publish." }
 }
 
 # 2. Build + publish the Stable channel Release.
@@ -228,7 +289,6 @@ Write-Step 2 "Building + publishing the Stable channel Release..."
 # build can overwrite them, but leave a side-by-side dev app (installed / run from elsewhere) and the
 # deployed stable copy running. Build-PiPlay's own stop is blunt (every PiPlay.exe by name), so we disable
 # it below (StopProcessName = '') and scope the stop here, mirroring the deploy step's path-scoped stop.
-$repoRootPrefix = $repoRoot.TrimEnd('\') + '\'
 $stoppedBuildTreeInstance = $false
 foreach ($proc in @(Get-Process -Name $projectName -ErrorAction SilentlyContinue)) {
     try {
@@ -278,6 +338,9 @@ if ($AllowDirty) {
 if ($AllowVersionBump) {
     $nonReleaseReasons += "-AllowVersionBump diagnostic publish: VERSION/BUILD_NUMBER may be stamped after sourceCommit"
 }
+if ($SkipTests) {
+    $nonReleaseReasons += "-SkipTests diagnostic publish: the deterministic test lane never ran"
+}
 if ($nonReleaseReasons.Count -gt 0) {
     $buildParams["NonReleaseReason"] = ($nonReleaseReasons -join "; ")
 }
@@ -296,8 +359,8 @@ if ($buildInfo.channel -ne "Stable") {
 
 # Belt-and-braces: a diagnostic escape hatch must never surface as release evidence even if the
 # reason plumbing above regresses.
-if (($AllowDirty -or $AllowVersionBump) -and $buildInfo.releaseEvidence) {
-    throw "Diagnostic publish (-AllowDirty/-AllowVersionBump) produced releaseEvidence=true; refusing to present a diagnostic deploy as release evidence."
+if (($AllowDirty -or $AllowVersionBump -or $SkipTests) -and $buildInfo.releaseEvidence) {
+    throw "Diagnostic publish (-AllowDirty/-AllowVersionBump/-SkipTests) produced releaseEvidence=true; refusing to present a diagnostic deploy as release evidence."
 }
 
 # 3. Validate publish metadata (SHA256/size integrity) for the freshly built label.
@@ -357,10 +420,10 @@ Invoke-StagedDeploy -DeployRoot $DeployRoot -SourceDir $latestDir -DataFolderNam
 # verify clean against the repo, so a verification failure can never leave a release-looking tag.
 $stableTag = "stable-v$($buildInfo.version)-b$($buildInfo.buildNumber)"
 $verifyScript = Join-Path $PSScriptRoot "Verify-StableDeploy.ps1"
-if ($AllowDirty -or $AllowVersionBump) {
+if ($AllowDirty -or $AllowVersionBump -or $SkipTests) {
     # Diagnostic deploy: no release tag; verify once in diagnostics-only mode.
     Write-Step 5 "Skipping stable tag for non-release evidence deploy."
-    Write-Warning "No stable tag created because -AllowDirty or -AllowVersionBump was used."
+    Write-Warning "No stable tag created because -AllowDirty, -AllowVersionBump, or -SkipTests was used."
 
     Write-Step 6 "Verifying the deployed copy (diagnostics-only)..."
     & $verifyScript -DeployRoot $DeployRoot -AllowNonReleaseEvidence
@@ -373,12 +436,22 @@ if ($AllowDirty -or $AllowVersionBump) {
 
     # The deployed bytes match the clean repo at HEAD - now it is safe to mint the release tag.
     Write-Step 6 "Creating exact-source stable tag '$stableTag' (pre-tag verification passed)..."
-    Assert-StableTag -TagName $stableTag -Commit ([string]$buildInfo.sourceCommit)
+    $tagCreated = Assert-StableTag -TagName $stableTag -Commit ([string]$buildInfo.sourceCommit)
 
     # Final gate: full release verification with NO escape hatch; the tag must now be present.
     Write-Step 7 "Final verification (full release checks, stable tag required)..."
     & $verifyScript -DeployRoot $DeployRoot
-    if ($LASTEXITCODE -ne 0) { throw "Deployed copy failed final verification - do NOT test from it." }
+    if ($LASTEXITCODE -ne 0) {
+        if (-not $tagCreated) {
+            throw "Deployed copy failed final verification; pre-existing stable tag '$stableTag' was preserved. Do NOT test from it."
+        }
+        # Only a tag minted by this invocation may be removed after failed final verification.
+        $tagRemoved = Invoke-Git @("tag", "-d", $stableTag)
+        if ([string]::IsNullOrEmpty($tagRemoved)) {
+            throw "Deployed copy failed final verification and the just-created stable tag '$stableTag' could NOT be deleted - remove it manually (git tag -d $stableTag) before the next publish; do NOT test from it."
+        }
+        throw "Deployed copy failed final verification - the just-created stable tag '$stableTag' was deleted; do NOT test from it."
+    }
 }
 
 Write-Host "`n--- STABLE DEPLOY COMPLETE ---" -ForegroundColor Green
@@ -389,7 +462,7 @@ if ($buildInfo.sha256) { Write-Host "SHA256       : $($buildInfo.sha256)" }
 if ($buildInfo.sourceCommit) { Write-Host "Commit       : $($buildInfo.sourceCommit)" }
 Write-Host "Release proof: $($buildInfo.releaseEvidence)"
 if (-not $buildInfo.releaseEvidence) { Write-Host "              $($buildInfo.releaseEvidenceReason)" -ForegroundColor Yellow }
-if (-not $AllowDirty -and -not $AllowVersionBump) { Write-Host "Stable tag   : $stableTag" }
+if (-not $AllowDirty -and -not $AllowVersionBump -and -not $SkipTests) { Write-Host "Stable tag   : $stableTag" }
 Write-Host "Deployed exe : $deployExe"
 Write-Host "Data folder  : $(Join-Path $DeployRoot $dataFolderName) (preserved across redeploys)"
 Write-Host "`nRun it:  & '$deployExe'"

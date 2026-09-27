@@ -375,7 +375,35 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
 $EvidenceDir = Resolve-ExternalDirectory -Path $EvidenceDir -Name 'EvidenceDir' -PackageRoot $packageRoot
 $DataRoot = Resolve-ExternalDirectory -Path $DataRoot -Name 'PIPLAY_DATA_ROOT' -PackageRoot $packageRoot
 
-$smokeScript = Join-Path $packageRoot 'scripts\Test-UiSmoke.ps1'
-& (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $smokeScript `
-    -ExePath $exePath -EvidenceDir $EvidenceDir -DataRoot $DataRoot -ReadyTimeoutSec $ReadyTimeoutSec
-if ($LASTEXITCODE -ne 0) { throw "Packaged UI smoke failed (exit $LASTEXITCODE)." }
+# The packaged Test-UiSmoke.ps1 binds its SMOKE PASS to a .piplay.publish marker with channel=Stable
+# (readiness review F-7) — the file a Publish-Stable deploy writes at swap time. A package has no
+# deploy, so materialise the identity here from the manifest fields this verifier has just
+# hash-checked. The marker MUST live outside the package root: the exact-inventory check above
+# tolerates only the two manifests, so any file added inside would make the next run of the same
+# extraction fail with a false "inventory does not match artifactHashes" tamper alarm. Temp file,
+# removed on every exit path.
+$smokeMarkerText = @"
+PiPlay package-verification marker (materialized by Test-DownloadedPackage.ps1; safe to clean).
+project=$($buildInfo.project)
+channel=$($buildInfo.channel)
+version=$($buildInfo.version)
+buildNumber=$($buildInfo.buildNumber)
+publishLabel=$($buildInfo.publishLabel)
+sourceCommit=$($buildInfo.sourceCommit)
+releaseEvidence=$($buildInfo.releaseEvidence)
+sourceDirty=$($buildInfo.sourceDirty)
+verifiedUtc=$((Get-Date).ToUniversalTime().ToString('o'))
+"@
+$smokeMarkerPath = Join-Path ([System.IO.Path]::GetTempPath()) `
+    ("PiPlaySmokeMarker-" + [Guid]::NewGuid().ToString('N') + '.piplay.publish.marker')
+try {
+    Set-Content -LiteralPath $smokeMarkerPath -Value $smokeMarkerText -Encoding UTF8
+    $smokeScript = Join-Path $packageRoot 'scripts\Test-UiSmoke.ps1'
+    & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $smokeScript `
+        -ExePath $exePath -EvidenceDir $EvidenceDir -DataRoot $DataRoot -MarkerPath $smokeMarkerPath `
+        -ReadyTimeoutSec $ReadyTimeoutSec
+    if ($LASTEXITCODE -ne 0) { throw "Packaged UI smoke failed (exit $LASTEXITCODE)." }
+}
+finally {
+    Remove-Item -LiteralPath $smokeMarkerPath -Force -ErrorAction SilentlyContinue
+}
