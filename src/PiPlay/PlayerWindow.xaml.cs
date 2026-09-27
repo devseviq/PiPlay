@@ -1739,6 +1739,7 @@ public partial class PlayerWindow : Window
         try { _surfaceDragBridge?.Dispose(); } catch { /* ignore */ }
         try { _playerFirstSurfaceBridge?.Dispose(); } catch { /* ignore */ }
         try { _shellBridge?.Dispose(); } catch { /* ignore */ }
+        try { YouTubeDomBridge.ForgetSurface(Player.CoreWebView2); } catch { /* ignore */ }
         try { Player.Dispose(); } catch { /* ignore */ }
 
         PlayerClosed?.Invoke(this, _returnState);

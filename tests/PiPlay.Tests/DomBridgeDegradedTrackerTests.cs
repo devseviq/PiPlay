@@ -56,6 +56,45 @@ public class DomBridgeDegradedTrackerTests
     }
 
     [Fact]
+    public void Releasing_a_torn_down_surface_drops_its_keys_and_clears_only_when_none_remain()
+    {
+        var tracker = new DomBridgeDegradedTracker();
+
+        // A popout degrades and then closes: its WebView never runs another call, so recovery can
+        // never remove its keys. Without a release the Source could never clear the hint again.
+        Assert.Equal("player-state read", tracker.RecordFailure(Source, "player-state read", 3));
+        Assert.Equal("player-state read", tracker.RecordFailure(Popout, "player-state read", 3));
+        Assert.Equal("source suppression", tracker.RecordFailure(Popout, "source suppression", 3));
+
+        // Releasing the popout drops both of its keys but the Source is still degraded.
+        Assert.False(tracker.ReleaseSurface(Popout));
+
+        // The Source's own recovery is now the last key, so it clears the hint.
+        Assert.True(tracker.RecordRecovery(Source, "player-state read"));
+    }
+
+    [Fact]
+    public void Releasing_the_last_degraded_surface_reports_the_all_clear()
+    {
+        var tracker = new DomBridgeDegradedTracker();
+
+        Assert.Equal("player-state read", tracker.RecordFailure(Popout, "player-state read", 3));
+
+        Assert.True(tracker.ReleaseSurface(Popout));
+        // A second release, or a release of a surface that never degraded, has nothing to clear.
+        Assert.False(tracker.ReleaseSurface(Popout));
+        Assert.False(tracker.ReleaseSurface(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Releasing_a_healthy_surface_never_reports_the_all_clear()
+    {
+        var tracker = new DomBridgeDegradedTracker();
+
+        Assert.False(tracker.ReleaseSurface(Source));
+    }
+
+    [Fact]
     public void Success_while_healthy_raises_nothing()
     {
         var tracker = new DomBridgeDegradedTracker();

@@ -44,5 +44,21 @@ internal sealed class DomBridgeDegradedTracker
         }
     }
 
+    /// <summary>
+    /// Drop every degraded key of a surface whose WebView is being torn down (a closed popout, a
+    /// replaced or disposed Source browser). Such a surface never runs another call, so recovery
+    /// could never remove its keys and the hint would outlive it. Returns true only when this
+    /// release removed at least one key and no degraded key remains anywhere.
+    /// </summary>
+    public bool ReleaseSurface(Guid surfaceId)
+    {
+        var prefix = $"{surfaceId}|";
+        lock (_sync)
+        {
+            var removed = _degraded.RemoveWhere(key => key.StartsWith(prefix, StringComparison.Ordinal));
+            return removed > 0 && _degraded.Count == 0;
+        }
+    }
+
     private static string Key(Guid surfaceId, string operation) => $"{surfaceId}|{operation}";
 }

@@ -584,6 +584,9 @@ public partial class MainWindow : Window
             var core = old.CoreWebView2;
             if (core is not null)
             {
+                // First, before a dead core can refuse the detaches below: the hint must not
+                // outlive the surface it was raised for.
+                YouTubeDomBridge.ForgetSurface(core);
                 core.NavigationStarting -= Core_NavigationStarting;
                 core.NavigationCompleted -= Core_NavigationCompleted;
                 core.NewWindowRequested -= Core_NewWindowRequested;

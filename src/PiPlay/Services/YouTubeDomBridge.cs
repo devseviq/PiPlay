@@ -128,9 +128,22 @@ public static class YouTubeDomBridge
     public static event Action<string?>? DegradedStateChanged;
 
     // Degraded keys are (surface, operation): the Source and a popout run the same operation names
-    // on different WebViews, so a healthy popout read must not clear the Source's hint. The CWT
-    // above binds each key's surface state to its WebView's lifetime; recovery removes its key.
+    // on different WebViews, so a healthy popout read must not clear the Source's hint. Recovery
+    // removes its key; a surface that is torn down never recovers, so its owner calls ForgetSurface.
     private static readonly DomBridgeDegradedTracker DegradedTracker = new();
+
+    /// <summary>
+    /// Forget a WebView that is being torn down (a closed popout, a replaced or disposed Source
+    /// browser): its degraded keys are dropped so the hint can clear once every surface that is
+    /// still alive is healthy. Pass the core captured before the control is disposed.
+    /// </summary>
+    public static void ForgetSurface(CoreWebView2? webView)
+    {
+        if (webView is null || !FailureStates.TryGetValue(webView, out var failureState)) return;
+        FailureStates.Remove(webView);
+        if (DegradedTracker.ReleaseSurface(failureState.SurfaceId))
+            DegradedStateChanged?.Invoke(null);
+    }
 
     /// <summary>Read current time / paused / duration, or null if no video or the read failed.</summary>
     public static async Task<PlayerState?> ReadPlayerStateAsync(CoreWebView2 webView)
