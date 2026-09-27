@@ -1,7 +1,7 @@
 # Repo-less SND-DESK release handoff
 
-This is the operational resume guide for moving PiPlay to a repository-free
-SND-DESK acceptance flow. The product contract remains
+This is the operational resume guide for PiPlay's repository-free SND-DESK
+acceptance flow. The product contract remains
 [`PiPlay_Product_Engineering_Spec.md`](PiPlay_Product_Engineering_Spec.md); this
 file records the resumable checkpoint, activation gates, and operator commands.
 
@@ -26,32 +26,67 @@ Do not place credentials in this repository, command history, logs, packages,
 or this guide. Do not copy a repository, build tree, or host-only state to
 SND-DESK.
 
-## Frozen checkpoint
+## Beta.3 test candidate — 2026-09-27
 
-The following is historical evidence captured on 2026-09-04. Refresh every
-volatile fact before acting.
+The candidate is **0.14.0-beta.3, build 42**. It contains the source fixes
+through `12fef1a5581accaf2b4f1a1459e61922aff649cd` plus the release stamps
+and documentation updates. Use the [GitHub Releases page](https://github.com/devseviq/PiPlay/releases)
+for the published package's complete tag, exact merged source commit, source
+CI run, ZIP, and checksum; this source document does not attest publication.
 
-| Item | Checkpoint |
+The [beta.3 changelog](CHANGELOG.md) describes its held-shortcut, Auto navigation,
+player sync warning, and release-tooling changes. Beta.2 does not contain them.
+Follow the [interactive checklist](#snd-desk-interactive-checklist) on the exact
+downloaded beta.3 package. Startup smoke, live playback/audio, renderer
+recovery, and mixed-DPI results must identify the package and machine tested;
+SND-DESK acceptance remains pending until those results are recorded.
+
+## Pre-publication checkpoint — 2026-09-27
+
+The following snapshot was captured before beta.3 preparation. It explains
+the starting point, not the current release list or branch state.
+
+The current source passes the local gate, but its latest fixes are not yet
+available in a SND-DESK download. The published beta.2 package can be tested
+for its own behavior; it cannot validate the Unreleased changes. Refresh this
+dated checkpoint before publication or acceptance.
+
+| Item | Verified checkpoint |
 |---|---|
-| Feature branch | `snd-host/repo-less-desk-downloads-20260904` |
-| Delivery implementation head | `0891ab1abd741df0bfc90f55af97e6daa08e8c1d` |
-| Feature commits | Nine delivery commits after `9f514c8`, followed by this handoff change |
-| Local `main` | `9f514c8f843309a7d6f8cf07d15f26d4450f58c5` |
-| Recorded `origin/main` | `3fa16131f27e5ff3ded787babab43694f6b3d4f0` |
-| Upstream | None configured for the feature branch |
-| Worktree | Clean |
-| Targeted verification | 23 release-policy and publisher tests passed; PowerShell parsed; `git diff --check` passed |
-| Full local gate | `LOCAL CI: PASS`; 1,151 tests passed; Release build had 0 warnings and 0 errors with the handoff content present |
-| GitHub access | `gh` credentials invalid and GitHub DNS resolution failed on SND-HOST |
-| Provider state | Rulesets, Actions permissions, secret presence, workflows, PRs, and releases unverified live |
+| Local source | `12fef1a5581accaf2b4f1a1459e61922aff649cd` on `polish/review-2026-09-10` |
+| Remote `main` | `78a39146e3968c76722ab285c0d8d891c1b62220`; local source is 20 commits ahead |
+| Remote feature branch | `969ba083d4568902493646c8c84130eb5467d4f8`; 18 local commits have not been pushed |
+| Source stamps | `0.14.0-beta.2`, build `41`, unchanged since the published beta; use the source commit to distinguish them |
+| Working tree at source verification | Tracked files clean; pre-existing untracked `.qoder/` preserved. This documentation refresh follows the verified source commit |
+| Full local gate | `LOCAL CI: PASS`; 1,642 tests passed, 0 failed/skipped; Release build had 0 warnings/errors; deploy-swap harness 84 passed and publish-lock harness 8 passed |
+| Required GitHub CI | [Successful main CI](https://github.com/devseviq/PiPlay/actions/runs/36058308184) covers `78a3914`; the local candidate has not reached required GitHub CI |
+| Latest published package | [0.14.0-beta.2, build 41](https://github.com/devseviq/PiPlay/releases/tag/test-78a39146e3968c76722ab285c0d8d891c1b62220-r36058308184-a1), published 2026-09-25, source `78a3914`, visible prerelease |
+| Download verification | Fresh GitHub ZIP and checksum matched; `Test-DownloadedPackage.ps1 -Kind Test -ValidateOnly` verified inventory, hashes, binary identity, and exact source commit |
+| Automated publication | `PIPLAY_RELEASE_POLICY_TOKEN` is absent from the Actions secret listing; the latest [publication run](https://github.com/devseviq/PiPlay/actions/runs/36059802202) failed at `Create GitHub test prerelease`. Beta.2 was published through the local-build route |
+| Other provider gates | Actions permissions and tag rulesets were not rechecked in this refresh; verify them before either publication route |
+| SND-DESK acceptance | Not run in this refresh; current desk installation, dependencies, startup, playback/audio, and mixed-DPI behavior remain unverified |
 
-The feature branch currently contains local review commit `9f514c8` before its
-nine delivery commits. Because the remote could not be queried, do not assume
-that commit is now on `origin/main` or that it belongs in the delivery PR.
+The verified beta.2 ZIP SHA256 is
+`0f651fe7765051eb73a0965827cb607c7f00ed0f6a3110c691d2fa6a2edb3d5b`.
+Its exact tag is
+`test-78a39146e3968c76722ab285c0d8d891c1b62220-r36058308184-a1`.
+No new package was published and no Stable or SND-DESK runtime was changed
+during this readiness check.
 
-## What the feature branch implements
+Before SND-DESK can test the latest fixes, land the intended changes through a
+PR and required CI, publish a new exact-source test package, and verify that
+download. The local source includes held-shortcut, Auto navigation, and player
+sync hint fixes now listed under [beta.3](CHANGELOG.md), plus the
+release-script repairs described below. Preserve `.qoder/` and any later local
+edits when preparing a clean candidate checkout.
 
-The nine commits from `0e96bdf` through `0891ab1` provide:
+This checkpoint supersedes the 2026-09-04 activation checkpoint. The delivery
+workflows are already on `main`, GitHub access works, and test prereleases
+exist; do not replay the old delivery-branch cherry-pick sequence.
+
+## Delivery contract
+
+The existing delivery implementation provides:
 
 - a manual `Publish test download` workflow that builds an exact-source,
   non-release package and publishes it as a uniquely tagged GitHub prerelease;
@@ -67,8 +102,6 @@ The nine commits from `0e96bdf` through `0891ab1` provide:
 - atomic test-tag creation before a draft prerelease is uploaded, followed by
   tag checks before and after publication;
 - behavioral and policy tests for the publication boundary.
-
-No live GitHub Release was created at the checkpoint.
 
 ## Resume sequence
 
@@ -93,24 +126,25 @@ Locate the existing worktree without assuming a user-specific path:
 git worktree list --porcelain
 ```
 
-In the feature worktree, verify the lane and preserve unexpected state:
+Verify elevation separately; the local build/test gate does not require
+administrator privileges. In the candidate worktree, verify the lane and
+preserve unexpected state:
 
 ```powershell
 git status --short --branch
 git branch --show-current
 git rev-parse HEAD
-git merge-base --is-ancestor 0891ab1 HEAD
 git log --oneline --decorate -12
 ```
 
-Expected delivery implementation ancestor: `0891ab1`; the current head also
-contains the later handoff commit. If that ancestry check fails, the worktree is
-dirty, or another process is writing it, stop and reconcile ownership before
-changing anything. Never reset, clean, stage, or discard unattributed changes.
+Compare the source with the dated checkpoint above and account for later
+changes. Use an isolated candidate worktree for integration and packaging if
+the existing checkout has unrelated files or active writers. Never reset,
+clean, stage, or discard unattributed changes.
 
-### 2. Restore and verify GitHub access
+### 2. Verify GitHub access and refresh the delivery base
 
-Authentication repair is an attended operator action:
+These checks identify the live delivery repository:
 
 ```powershell
 Resolve-DnsName github.com
@@ -118,41 +152,26 @@ gh auth status
 git ls-remote --heads origin main
 ```
 
-If authentication remains invalid, use the GitHub CLI's attended login or
-refresh flow. Do not paste a token into a command or document. Continue only
-when DNS, `gh`, and the Git remote all work for the intended account and
-repository.
-
-### 3. Refresh the base and decide the review-commit boundary
-
 Fetching changes local remote-tracking state but does not change the worktree:
 
 ```powershell
-git fetch --prune origin
+git fetch origin
 git rev-parse origin/main
 git log --left-right --graph --cherry-pick --oneline origin/main...HEAD
 git diff --stat origin/main...HEAD
 ```
 
-Explicitly decide whether review commit `9f514c8` belongs in the PR:
+If authentication fails, use the GitHub CLI's attended login or refresh flow.
+Do not paste a token into a command or document.
 
-- If current `origin/main` already contains it, no special exclusion is needed.
-- If it is absent and belongs in the PR, record that decision before integration.
-- If it is absent and must not be in the PR, preserve the original branch and
-  transplant only `9f514c8..0891ab1` onto a new branch from current
-  `origin/main`. Do not rewrite or force-push the checkpoint branch merely to
-  simplify the graph.
+### 3. Prepare the exact candidate
 
-One preservation-first exclusion pattern is:
-
-```powershell
-git branch snd-host/repo-less-desk-downloads-20260904-checkpoint 0891ab1
-git switch --create snd-host/repo-less-desk-downloads-20260904-pr origin/main
-git cherry-pick 9f514c8..0891ab1
-```
-
-If any cherry-pick conflicts, stop and resolve the product/document authority
-conflict deliberately. Do not use an automatic ours/theirs resolution.
+Review all commits and the final diff against refreshed `origin/main`. Prepare
+a machine-namespaced `snd-host/...` candidate branch without rewriting the
+existing feature branch. Include the intended fixes and documentation, and
+commit the chosen prerelease version/build stamps if they change. The source
+commit, package manifest, and release tag remain the exact candidate identity;
+the current version/build stamps alone do not distinguish the unpublished fixes.
 
 ### 4. Run the complete local gate
 
@@ -164,8 +183,9 @@ git diff --check
 git status --short --branch
 ```
 
-The exit gate is `LOCAL CI: PASS`, no diff-check errors, and a clean worktree.
-The earlier targeted 23-test result is not a substitute for this gate.
+The exit gate is `LOCAL CI: PASS`, no diff-check errors, and a clean candidate
+worktree. Rerun it on the final candidate; the checkpoint's source result does
+not certify later code changes.
 
 ### 5. Push, review, and merge
 
@@ -221,7 +241,7 @@ before creating a Stable tag or dispatching the test workflow.
 After the PR is merged and local `origin/main` is refreshed:
 
 ```powershell
-git fetch --prune origin
+git fetch origin
 $expectedCommit = (git rev-parse origin/main).Trim()
 gh workflow run 'Publish test download' --repo devseviq/PiPlay --ref main
 gh run list --repo devseviq/PiPlay --workflow 'Publish test download' `
@@ -244,6 +264,7 @@ PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen are required.
 From the download directory:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $commit = '<40-character commit from the release tag>'
 $tag = '<complete test tag from the GitHub Release>'
 $zip = ".\PiPlay-$tag.zip"
@@ -255,16 +276,42 @@ Expand-Archive -LiteralPath $zip -DestinationPath ".\PiPlay-$tag"
 Set-Location -LiteralPath ".\PiPlay-$tag"
 pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 `
     -Kind Test -ExpectedCommit $commit
+if ($LASTEXITCODE -ne 0) { throw 'Package verification or startup smoke failed.' }
 ```
 
 The packaged verifier checks provenance and launches the automated UI smoke
-with disposable data and evidence outside the immutable package root. Then run
-the attended product checks: pop out a playing video, listen for double audio
-through launch and return/close, repeat with a playlist or mix when available,
-and record unavailable ad/account/profile states as not run.
+with disposable data and evidence outside the immutable package root. Close
+other PiPlay instances first: downloaded packages share a single-instance
+identity. Use an active, unlocked desktop for the startup smoke. With
+`-ValidateOnly`, the verifier checks the package without launching PiPlay;
+that result does not establish startup or interactive acceptance.
 
 Acceptance is tied to the exact commit and test tag. A passed test prerelease
 does not authorize Stable promotion by itself.
+
+### SND-DESK interactive checklist
+
+Use the verified downloaded package, then record its tag, source commit,
+version/build, Windows version, WebView2 version, display scaling, and results.
+Keep screenshots and logs outside the immutable package. Record each case as
+pass, fail, or not run, with reproduction steps for failures. The current
+checkpoint has no SND-DESK results.
+
+| Check | Expected result |
+|---|---|
+| Package and startup | ZIP checksum and complete package verification pass; the packaged UI smoke opens the correct executable and records a nonblank screenshot |
+| Pop out and return/close (Q-1) | Repeat on a playing and a paused video; hear only one audio stream and preserve position, volume, mute, speed, and play/pause state |
+| Ads, autoplay, playlist/mix | Repeat transfers across available transitions; listen for overlap and verify YouTube controls, captions, and ad disclosure remain usable. Record unavailable account/ad cases as not run |
+| Auto | Bring a video back and confirm no immediate repeat popout. On beta.3, leave for Home/search and return to the same video; Auto should pop it out again |
+| Shortcuts and windows | Exercise the README shortcuts, top-bar drag/double-click, corner parking, preset sizes, Pin, Fade, and Expand. On the new candidate, hold a shortcut while pressing/releasing an unrelated key; it should still act only once |
+| Recovery and sync hint | On a disposable test profile, terminate only a renderer belonging to this PiPlay instance and check Retry/return recovery. If **Player sync degraded** appears on the new candidate, verify it clears after the failing operations recover or their browser surface closes |
+| Displays and themes | Move between monitors with different scaling; check resizing, preset aspect ratio, theme contrast, the profile-menu shadow, and Focused controls against YouTube's ad disclosure |
+| Settings and restart | Restart the downloaded copy and confirm window positions, profiles, and presentation settings persist |
+
+Brief audio overlap, playlist queue position, and mixed-DPI appearance remain
+known acceptance gaps. A package or startup pass does not close them. Redact
+logs/screenshots before feedback; never attach browser profiles, cookies, or
+credentials.
 
 ### Local test publication while the Actions policy secret is pending
 
@@ -306,18 +353,30 @@ ready, and it does not satisfy the separate Stable readiness gate.
 
 ## Separate next-Stable readiness gate
 
-The repo-less delivery commits do not close the immediate release-path findings
-in [`reviews/review-controller-2026-09-02-piplay-readiness.md`](reviews/review-controller-2026-09-02-piplay-readiness.md):
+Beta.3 contains repairs for the release-path findings in the
+[2026-09-02 review](reviews/review-controller-2026-09-02-piplay-readiness.md).
+The beta.2 ZIP does not contain these repairs. Verify the final merged source
+and downloaded package identity before using them as test evidence.
 
-- F-1: deploy-root validation and unrelated-content protection;
-- F-6: `-SkipTests` release-evidence handling and local-gate parity;
-- F-7: UI-smoke binding to the deployed Stable copy; and
-- F-8: deploy-swap and publish-lock harnesses in the required gate.
+| Finding | Local implementation and remaining evidence |
+|---|---|
+| F-1 | Deploy-root guards reject unrelated content and repository overlap before mutation; repair requires evidence for the affected payload names. The deploy-swap harness passed 84 checks |
+| F-6 | Stable publishing runs `Test-LocalCI.ps1`; `-SkipTests` produces diagnostic, non-release evidence and creates no Stable tag |
+| F-7 | UI smoke binds its target and evidence to the deployed Stable identity. The live default-path smoke on the intended deployment remains pending |
+| F-8 | Deploy-swap and publish-lock harnesses are included in the canonical local/GitHub gate; both passed locally |
+| A-2 | A failed final deployment verification removes the Stable tag created by that run; tags remain local until explicitly pushed |
 
-Refresh those findings against merged `main` and close or explicitly disposition
-them before the next `Publish-Stable.ps1` run. F-1 is a destructive-scope hard
-block. A successful repo-less test prerelease does not satisfy this separate
-readiness gate.
+Before the next `Publish-Stable.ps1` run, land and verify the intended repairs
+on merged `main`, then satisfy the clean-source and deployed-copy gates below.
+Live renderer recovery (F-4), the deployed default-path smoke (F-7), and attended
+audio/journey acceptance (Q-1) remain separate checks. Source tests and a test
+prerelease do not establish those results.
+
+The existing Stable swap still treats `.staging` and `.backup` siblings beside
+a complete installation as deploy-owned and may delete them without proving
+their contents belong to PiPlay. The missing-root safeguards do not cover that
+case. Resolve foreign sibling custody before Stable deployment; test-package
+build and download verification do not invoke that deployment path.
 
 ## First Stable release after activation
 
@@ -358,9 +417,9 @@ publication and must not be inferred from this handoff.
 Stop rather than improvise if any of these is true:
 
 - machine identity is not the exact enrolled SND-HOST instance;
-- the feature lane is dirty, moved, or actively written by another process;
+- the publication candidate is dirty, moved, or actively written by another process;
 - actual remote `main` cannot be fetched and identified;
-- the `9f514c8` inclusion decision is missing;
+- the intended fixes are not in the selected merged source commit;
 - full local CI or required GitHub CI fails;
 - provider permissions, secret scope, ruleset coverage, exclusions, or bypass
   actors cannot be verified;

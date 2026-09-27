@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.14.0-beta.3 — 2026-09-27 (build 42)
+
+Test prerelease for SND-DESK feedback. Requires Windows x64, the .NET 10 Desktop Runtime, WebView2 Evergreen, and PowerShell 7 for package verification. Live playback/audio and mixed-DPI acceptance remain pending.
+
+- Holding a shortcut no longer allows it to fire again when an unrelated key is released.
+- With Auto enabled, leaving a video's watch page for Home, search, or a channel and returning to the same video lets it pop out again. Bringing the video back still prevents an immediate repeat popout.
+- The Source Window shows **Player sync degraded** when PiPlay repeatedly cannot read or control the YouTube page. The hint remains while either window has a failing operation, and clears when the affected operations recover or their browser surface closes.
+- Package startup checks identify the exact version, build, and source commit they ran. Release tooling adds deploy-root and interrupted-repair guards, includes deployment and lock checks in CI, and keeps diagnostic builds from being treated as Stable release evidence.
+
 ## 0.14.0-beta.2 — 2026-09-24 (build 41)
 
 Test prerelease for feedback. Requires Windows x64, the .NET 10 Desktop Runtime, and WebView2 Evergreen; PowerShell 7 is needed for package verification. See the README for setup and known limitations.

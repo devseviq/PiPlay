@@ -6,15 +6,16 @@ Build, publication, and acceptance procedures for maintainers. The product contr
 
 SND-HOST owns the working repository, feature work, builds, and publication. Start from current `main`, use a machine-namespaced `snd-host/...` branch, run the local gate, and open a pull request. GitHub-hosted `Build and test (Windows)` is the required merge check.
 
-SND-DESK has no repository checkout and accepts downloads only from GitHub Releases. It uses either a test prerelease or a Stable release; every package contains its own hash-covered verifier and UI-smoke entrypoint.
+SND-DESK uses a repository-free acceptance flow and accepts downloads only from GitHub Releases. It uses either a test prerelease or a Stable release; every package contains its own hash-covered verifier and UI-smoke entrypoint. An old checkout, if present, has no source authority and is retired separately.
 
-For the resumable activation sequence, machine boundaries, provider gates, and stop conditions, see [`docs/REPO_LESS_DESK_RELEASE_HANDOFF.md`](REPO_LESS_DESK_RELEASE_HANDOFF.md).
+For the current source/package checkpoint, SND-DESK checklist, machine boundaries, and provider gates, see [`REPO_LESS_DESK_RELEASE_HANDOFF.md`](REPO_LESS_DESK_RELEASE_HANDOFF.md). A passing local gate does not update the published download; compare the package's exact source commit with the candidate before testing new fixes.
 
 ## Downloaded test packages
 
-Manually dispatch the `Publish test download` workflow for the commit to test. It creates a uniquely tagged GitHub prerelease containing a ZIP and SHA256 file. Download both from the Releases page on SND-DESK, then run:
+After the candidate is merged, its required CI has passed, and the provider prerequisites below are verified, manually dispatch the `Publish test download` workflow on `main`. Match the run's source commit to the intended candidate. It creates a uniquely tagged GitHub prerelease containing a ZIP and SHA256 file. Download both from the Releases page on SND-DESK, then run from the download directory:
 
 ```powershell
+$ErrorActionPreference = 'Stop'
 $commit = '<40-character commit from the prerelease tag or notes>'
 $tag = "test-$commit-r<run-id>-a<attempt>"
 $zip = ".\PiPlay-$tag.zip"
@@ -25,11 +26,14 @@ if ($actualHash -ine $expectedHash) { throw 'Downloaded test ZIP hash mismatch.'
 Expand-Archive -LiteralPath $zip -DestinationPath ".\PiPlay-$tag"
 Set-Location -LiteralPath ".\PiPlay-$tag"
 pwsh -NoProfile -File .\scripts\Test-DownloadedPackage.ps1 -Kind Test -ExpectedCommit $commit
+if ($LASTEXITCODE -ne 0) { throw 'Package verification or startup smoke failed.' }
 ```
 
 The command binds the package to the commit shown by GitHub, verifies the complete package and baked Stable channel, then launches the automated UI smoke. Test prereleases are explicitly marked as non-release evidence and remain on the Releases page until deliberately removed; the workflow does not delete them automatically. Automated publishing requires the same `PIPLAY_RELEASE_POLICY_TOKEN` secret plus an active, exclusion-free, no-bypass tag ruleset for `refs/tags/test-*`, preventing the verified test tag from moving during publication. Downloaded packages require PowerShell 7, the .NET 10 Desktop Runtime, and WebView2 Evergreen.
 
 While the Actions policy secret is being provisioned, SND-HOST can use the [local test-publication procedure](REPO_LESS_DESK_RELEASE_HANDOFF.md#local-test-publication-while-the-actions-policy-secret-is-pending). It preserves package and tag verification and records the local build separately from the successful source CI run.
+
+Close other PiPlay instances and use an active, unlocked desktop for the startup smoke. `-ValidateOnly` verifies package contents without launching the app; it does not establish startup, playback, audio, or display-scaling acceptance. Complete the [SND-DESK interactive checklist](REPO_LESS_DESK_RELEASE_HANDOFF.md#snd-desk-interactive-checklist) on the exact downloaded candidate and record unavailable cases as not run.
 
 ## Stable acceptance
 

@@ -35,7 +35,9 @@ These shortcuts work while the video has keyboard focus. YouTube's own keys also
 
 ## Try the beta
 
-Download the ZIP and matching `.sha256` file for the newest prerelease (currently **0.14.0-beta.2**) from [GitHub Releases](https://github.com/devseviq/PiPlay/releases). The build is unsigned.
+Download the ZIP and matching `.sha256` file for the newest prerelease from [GitHub Releases](https://github.com/devseviq/PiPlay/releases). The build is unsigned.
+
+The **0.14.0-beta.3** candidate (build **42**) adds fixes for held shortcuts, Auto navigation, and the player sync warning. Check the release notes for the exact package tag and source commit. See the [SND-DESK testing handoff](docs/REPO_LESS_DESK_RELEASE_HANDOFF.md#beta3-test-candidate--2026-09-27) for candidate scope and the remaining test checklist.
 
 1. Install what the release needs: Windows x64, the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0), the [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/), and [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows), which the package check uses.
 2. Follow the download and verification commands in the release notes. They confirm the ZIP is the one GitHub published.
@@ -92,4 +94,5 @@ dotnet run --project src\PiPlay                     # Default channel, data in %
 | [`docs/YouTube_Compliance.md`](docs/YouTube_Compliance.md) | Page-script and platform-safety policy |
 | [`docs/Theme_Preset_Differences.md`](docs/Theme_Preset_Differences.md) | Theme values |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | Test and Stable publication and acceptance |
+| [`docs/REPO_LESS_DESK_RELEASE_HANDOFF.md`](docs/REPO_LESS_DESK_RELEASE_HANDOFF.md) | Current candidate, published package, and SND-DESK test checklist |
 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | User-visible changes |

@@ -25,7 +25,7 @@ Settings opens with Appearance, followed by Popout behaviour, then Privacy. Appe
 
 ### 6.1 Auto
 
-Off by default; eligible only for a playing `/watch` video. Shorts, embeds, home, search, settings, history, and login do not auto-pop. Launch/return uses one identity gate so the returned video is not immediately re-popped; only switching Auto on clears it, so a browser restart keeps it. (`AutoPopoutPolicy`, `AutoPopoutPolicyTests`, `MainWindowRecoveryTests`.)
+Off by default; eligible only for a playing `/watch` video. Shorts, embeds, home, search, settings, history, and login do not auto-pop. Launch/return uses one identity gate so the returned video is not immediately re-popped. Switching Auto on or leaving the Source watch page outside a popout/return transition clears it; returning from Home, search, or a channel to the same video can auto-pop again. A browser restart on the same watch page keeps the gate. (`AutoPopoutPolicy`, `AutoPopoutPolicyTests`, `MainWindowRecoveryTests`.)
 
 ### 6.2 Fade
 
@@ -107,6 +107,8 @@ Parses supported YouTube video/share/Shorts/embed/watch-playlist URLs and builds
 ### 12.5 YouTubeDomBridge and host protocols
 
 All normal-page JavaScript belongs in `YouTubeDomBridge`. Host requests are exact-schema, versioned, nonce/document-token checked, source checked, and trusted-input gated. Focused actions and drag-message rules: [`YouTube_Compliance.md`](YouTube_Compliance.md).
+
+Three consecutive failures of a DOM operation on either browser surface show **Player sync degraded** in the Source title bar. Failure tracking is per surface and operation; a successful call elsewhere does not hide the warning. The hint clears only when every degraded operation has recovered or its browser surface has been released. (`DomBridgeDegradedTracker`, `YouTubeDomBridge`, `DomBridgeDegradedTrackerTests`, `MainWindowRecoveryTests`.)
 
 ### 12.6 SettingsService
 
